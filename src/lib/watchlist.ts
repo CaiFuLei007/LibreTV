@@ -1,4 +1,4 @@
-import { db } from './db';
+import { db, notifySync } from './db';
 
 /**
  * 追番/观影清单（想看 / 在看 / 已看 / 废弃 四态）。
@@ -135,6 +135,7 @@ export async function saveWatchlistEntry(seed: WatchlistSeed): Promise<void> {
   merged.playbackPosition = merged.playbackPosition ?? 0;
   merged.duration = merged.duration ?? 0;
   await db.watchlist.put(merged);
+  notifySync('watchlist', id);
 }
 
 /**
@@ -150,6 +151,7 @@ export async function toggleWatchlistStatus(
   const existing = await db.watchlist.get(id);
   if (existing?.status === target) {
     await db.watchlist.delete(id);
+    notifySync('watchlist', id);
     return null;
   }
   await saveWatchlistEntry({ ...seed, status: target });
@@ -162,14 +164,18 @@ export async function toggleWatchlistStatus(
  * 而这里条目一定已存在，只需改状态与时间戳。
  */
 export async function setWatchlistStatus(title: string, status: WatchStatus): Promise<void> {
-  await db.watchlist.update(watchlistKeyOf(title), {
+  const id = watchlistKeyOf(title);
+  await db.watchlist.update(id, {
     status,
     updatedAt: Date.now(),
   });
+  notifySync('watchlist', id);
 }
 
 export async function removeWatchlistEntry(title: string): Promise<void> {
-  await db.watchlist.delete(watchlistKeyOf(title));
+  const id = watchlistKeyOf(title);
+  await db.watchlist.delete(id);
+  notifySync('watchlist', id);
 }
 
 /** 撤销删除：按原样回填（保留原始时间戳，不会把恢复的记录顶到最前） */
@@ -255,6 +261,7 @@ export async function applyPlaybackProgress(
       createdAt: now,
       updatedAt: now,
     });
+    notifySync('watchlist', id);
     return;
   }
 
@@ -271,6 +278,7 @@ export async function applyPlaybackProgress(
       ...sourcePatch,
       updatedAt: now,
     });
+    notifySync('watchlist', id);
     return;
   }
 
@@ -284,4 +292,5 @@ export async function applyPlaybackProgress(
   if (p.episodeIndex !== existing.episodeIndex) patch.episodeIndex = p.episodeIndex;
   patch.updatedAt = now;
   await db.watchlist.update(id, patch);
+  notifySync('watchlist', id);
 }

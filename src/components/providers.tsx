@@ -9,6 +9,9 @@ import { GlobalDownloadManager } from './download-manager';
 import { useAppStore, hydrateLiveProbeResults } from '@/lib/store';
 import { api, STATUS_QUERY_KEY } from '@/lib/client-api';
 import { applyEnvPresets } from '@/lib/subscription-sync';
+import { registerSyncNotifier } from '@/lib/db';
+import { deleteRemote, migrateLocalToServer, pushToServer, syncAll } from '@/lib/sync';
+import { pullSettings, pushSettings } from '@/lib/settings-sync';
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -41,6 +44,54 @@ export function Providers({ children }: { children: ReactNode }) {
         if (d) return applyEnvPresets(d);
       })
       .catch(() => {});
+
+    // 服务端同步初始化：登录态就绪后再跑，避免首次 401 白跑一趟。
+    // 顺序很关键：先把浏览器里已有的旧数据上行（迁移），再拉服务端覆盖，
+    // 否则升级后第一次打开会把原有片单冲掉。
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          await migrateLocalToServer();
+          await syncAll();
+          // 设置/视频源：服务端有内容就覆盖本地（换了设备时把源配置带过来），
+          // 本地有内容而服务端空则上行补种
+          const pulled = await pullSettings();
+          if (pulled) {
+            await useAppStore.persist.rehydrate();
+          } else {
+            await pushSettings();
+          }
+        } catch {
+          /* 服务端不可用时保持本地数据可用 */
+        }
+      })();
+    }, 1500);
+
+    // 本地数据变更 → 累积后统一上行（防抖，避免播放进度每秒发一次请求）
+    let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingDelete: { kind: 'watchlist' | 'history'; id: string } | null = null;
+    registerSyncNotifier((kind, id) => {
+      if (kind === 'progress') return; // 进度量大且可重建，不单独上行
+      pendingDelete = { kind, id };
+      if (pendingTimer) clearTimeout(pendingTimer);
+      pendingTimer = setTimeout(() => {
+        pendingTimer = null;
+        // 删除无法用 upsert 表达，先告知服务端再整体上行
+        const del = pendingDelete;
+        pendingDelete = null;
+        void (async () => {
+          if (del) await deleteRemote(del.kind, del.id);
+          await pushToServer();
+          await pushSettings();
+        })();
+      }, 1200);
+    });
+
+    return () => {
+      clearTimeout(timer);
+      if (pendingTimer) clearTimeout(pendingTimer);
+      registerSyncNotifier(null);
+    };
   }, [queryClient]);
 
   return (
