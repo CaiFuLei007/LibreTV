@@ -126,6 +126,7 @@ export async function upsertHistory(entry: Omit<HistoryEntry, 'id'>): Promise<vo
     timestamp: Date.now(),
   };
   await db.history.put(merged);
+  notifySync('history', id);
   // 淘汰最旧记录
   const count = await db.history.count();
   if (count > MAX_HISTORY) {
@@ -149,6 +150,7 @@ export async function updateHistoryProgress(
     duration,
     timestamp: Date.now(),
   });
+  notifySync('history', id);
 }
 
 export async function removeHistory(sourceKey: string, vodId: string): Promise<void> {
@@ -166,12 +168,14 @@ export function progressKeyOf(sourceKey: string, vodId: string, episodeIndex: nu
 
 export async function saveProgress(sourceKey: string, vodId: string, episodeIndex: number, position: number, duration: number): Promise<void> {
   if (!duration || position < 1) return;
+  const key = progressKeyOf(sourceKey, vodId, episodeIndex);
   await db.progress.put({
-    key: progressKeyOf(sourceKey, vodId, episodeIndex),
+    key,
     position,
     duration,
     updatedAt: Date.now(),
   });
+  notifySync('progress', key);
 }
 
 export async function clearProgress(sourceKey: string, vodId: string, episodeIndex: number): Promise<void> {
@@ -281,3 +285,24 @@ export async function importConfig(content: string): Promise<void> {
 }
 
 export type { SourceConfig };
+
+// —— 服务端同步钩子 ——
+// db.ts 不能反向 import sync.ts（sync 依赖 db），故用可注册的回调：
+// sync.ts 在客户端初始化时注册，这里只负责在数据变更后通知它。
+type SyncNotifier = (kind: 'watchlist' | 'history' | 'progress', id: string) => void;
+let syncNotifier: SyncNotifier | null = null;
+
+/** 由 sync.ts 注册：本地任一数据变更后把改动推给服务端 */
+export function registerSyncNotifier(fn: SyncNotifier | null): void {
+  syncNotifier = fn;
+}
+
+function notifySync(kind: 'watchlist' | 'history' | 'progress', id: string): void {
+  try {
+    syncNotifier?.(kind, id);
+  } catch {
+    /* 同步失败不影响本地操作 */
+  }
+}
+
+export { notifySync };
