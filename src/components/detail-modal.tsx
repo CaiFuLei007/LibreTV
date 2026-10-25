@@ -15,6 +15,7 @@ import { copyToClipboard } from '@/lib/clipboard';
 import { EmptyState, ErrorState, LoadingState } from './states';
 import { useFocusTrap } from './use-focus-trap';
 import { Icon } from './icon';
+import { WatchlistActions, seedOf } from './watchlist-actions';
 
 /**
  * 详情弹窗：剧集列表 + 排序 + 复制链接。
@@ -145,6 +146,8 @@ export function DetailModal({ item, onClose }: { item: SearchResultItem | null; 
             <h2 className="text-lg font-semibold text-content break-words">{item.name}</h2>
             <span className="text-sm text-faint">{item.sourceName}</span>
           </div>
+          {/* 详情页信息更全（含封面/简介），收藏时把元数据一并落库，收藏夹里才有封面 */}
+          <WatchlistActions seed={seedOf({ ...item, pic: item.pic ?? info?.cover })} variant="full" className="shrink-0" />
           <button
             className="p-1.5 rounded-md text-muted hover:text-content hover:bg-hover shrink-0"
             onClick={onClose}

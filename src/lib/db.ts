@@ -2,6 +2,7 @@ import Dexie, { type EntityTable } from 'dexie';
 import type { SourceConfig } from './types';
 // 仅类型引入：store.ts 运行时会引用本模块，反向只取类型不会形成运行时循环
 import type { LiveProbeEntry } from './store';
+import type { WatchlistEntry } from './watchlist';
 import { PERSIST_KEY, flushPendingPersist } from './persist-storage';
 
 /**
@@ -77,6 +78,7 @@ export const db = new Dexie('libretv') as Dexie & {
   liveProbe: EntityTable<LiveProbeEntry & { url: string }, 'url'>;
   segmentMeta: EntityTable<SegmentMetaEntry, 'key'>;
   downloads: EntityTable<DownloadTaskEntry, 'id'>;
+  watchlist: EntityTable<WatchlistEntry, 'id'>;
 };
 
 db.version(1).stores({
@@ -94,6 +96,19 @@ db.version(2).stores({
 db.version(3).stores({
   segmentMeta: 'key, episodeKey, lastAccess',
   downloads: 'id, createdAt',
+});
+
+// v4：追番清单。status 与 updatedAt 建索引，各栏排序取数不必全表扫
+db.version(4).stores({
+  watchlist: 'id, status, updatedAt',
+});
+
+// v5：主键语义改为「片名归一化」，旧记录（id 形如 `sourceKey_vodId`）已无法
+// 与新身份对应，且数量有限，直接清空重建；收藏属于用户可重建的轻数据。
+db.version(5).stores({
+  watchlist: 'id, status, updatedAt',
+}).upgrade(async (tx) => {
+  await tx.table('watchlist').clear();
 });
 
 export const MAX_HISTORY = 100;
