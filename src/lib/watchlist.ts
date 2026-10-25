@@ -37,6 +37,13 @@ export interface WatchlistEntry {
   totalEpisodes: number;
   playbackPosition: number;
   duration: number;
+  /**
+   * 用户已知的集数：上次查看该片时记录的总集数。
+   * 与最新拉到的总集数比较即可得出「新增 N 集」，避免每次打开都提醒。
+   */
+  knownEpisodes: number;
+  /** 是否有未查看的新增集数（列表打红点），点开详情后清除 */
+  hasNewEpisodes: boolean;
   /** 最近一次播放用的源，仅作线索（换源后会被覆盖），不参与身份判定 */
   lastSourceKey?: string;
   lastSourceUrl?: string;
@@ -122,6 +129,8 @@ export async function saveWatchlistEntry(seed: WatchlistSeed): Promise<void> {
     totalEpisodes: 0,
     playbackPosition: 0,
     duration: 0,
+    knownEpisodes: 0,
+    hasNewEpisodes: false,
     ...existing,
     ...seed,
     // 片名以本次传入为准（seed 里的已是 trim 前的原始值，这里统一规范化）
@@ -134,6 +143,8 @@ export async function saveWatchlistEntry(seed: WatchlistSeed): Promise<void> {
   merged.totalEpisodes = merged.totalEpisodes ?? 0;
   merged.playbackPosition = merged.playbackPosition ?? 0;
   merged.duration = merged.duration ?? 0;
+  merged.knownEpisodes = merged.knownEpisodes ?? 0;
+  merged.hasNewEpisodes = merged.hasNewEpisodes ?? false;
   await db.watchlist.put(merged);
   notifySync('watchlist', id);
 }
@@ -257,6 +268,8 @@ export async function applyPlaybackProgress(
       totalEpisodes: meta.totalEpisodes ?? 0,
       playbackPosition: p.position,
       duration: p.duration,
+      knownEpisodes: meta.totalEpisodes ?? 0,
+      hasNewEpisodes: false,
       ...sourcePatch,
       createdAt: now,
       updatedAt: now,

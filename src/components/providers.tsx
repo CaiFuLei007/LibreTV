@@ -9,7 +9,7 @@ import { GlobalDownloadManager } from './download-manager';
 import { useAppStore, hydrateLiveProbeResults } from '@/lib/store';
 import { api, STATUS_QUERY_KEY } from '@/lib/client-api';
 import { applyEnvPresets } from '@/lib/subscription-sync';
-import { registerSyncNotifier } from '@/lib/db';
+import { db, registerSyncNotifier } from '@/lib/db';
 import { deleteRemote, migrateLocalToServer, pushToServer, syncAll } from '@/lib/sync';
 import { pullSettings, pushSettings } from '@/lib/settings-sync';
 
@@ -69,18 +69,30 @@ export function Providers({ children }: { children: ReactNode }) {
 
     // 本地数据变更 → 累积后统一上行（防抖，避免播放进度每秒发一次请求）
     let pendingTimer: ReturnType<typeof setTimeout> | null = null;
-    let pendingDelete: { kind: 'watchlist' | 'history'; id: string } | null = null;
+    // 用 Map 而非单变量：1.2s 内连删多条时，单变量只会记住最后一条，
+    // 前面的删除漏同步，下次拉取会从服务端把它们「复活」。
+    // 键为 `kind:id` 天然去重（同一项反复删只留一条）。
+    const pendingDeletes = new Map<string, { kind: 'watchlist' | 'history'; id: string }>();
+
     registerSyncNotifier((kind, id) => {
       if (kind === 'progress') return; // 进度量大且可重建，不单独上行
-      pendingDelete = { kind, id };
+      // 本地先判存不存在：能删掉说明是删除；删不掉说明是新增/更新。
+      // 两者都进队列，但只有「已不存在」才需要通知服务端删除。
+      pendingDeletes.set(`${kind}:${id}`, { kind, id });
       if (pendingTimer) clearTimeout(pendingTimer);
       pendingTimer = setTimeout(() => {
         pendingTimer = null;
-        // 删除无法用 upsert 表达，先告知服务端再整体上行
-        const del = pendingDelete;
-        pendingDelete = null;
+        const batch = [...pendingDeletes.values()];
+        pendingDeletes.clear();
         void (async () => {
-          if (del) await deleteRemote(del.kind, del.id);
+          // 逐条确认该 id 在本地是否真的已不存在；存在说明是 upsert，跳过删除
+          for (const item of batch) {
+            const stillExists =
+              item.kind === 'watchlist'
+                ? await db.watchlist.get(item.id)
+                : await db.history.get(item.id);
+            if (!stillExists) await deleteRemote(item.kind, item.id);
+          }
           await pushToServer();
           await pushSettings();
         })();

@@ -68,6 +68,8 @@ function WatchContent() {
   const [skipPanelOpen, setSkipPanelOpen] = useState(false);
   // 播放器对外暴露的精确时间读取接口（「记录当前」用），随播放器卸载置空
   const playerApiRef = useRef<PlayerSkipApi | null>(null);
+  /** 本集是否已自动换过一次源（防止所有源都挂时无限跳转） */
+  const autoSwitchedRef = useRef(false);
   // 播放框：小屏「跳过标记」抽屉要按它的底边算剩余高度，避免压住画面
   const playerFrameRef = useRef<HTMLDivElement | null>(null);
   const [sheetMaxHeight, setSheetMaxHeight] = useState<number | undefined>(undefined);
@@ -129,6 +131,11 @@ function WatchContent() {
     if (episodes.length > 0) return Math.min(Math.max(indexParam, 0), episodes.length - 1);
     return indexParam;
   }, [episodes, indexParam]);
+
+  // 换集/换源后重置：新的一集应重新获得自动换源机会
+  useEffect(() => {
+    autoSwitchedRef.current = false;
+  }, [sourceKey, vodId, currentIndex]);
 
   // 跳过片段按剧名记忆：换集不变，换源到同名资源也能命中。
   // 标题缺失（直连链接）时退回 source:vodId，至少保证本源本片可用。
@@ -262,6 +269,69 @@ function WatchContent() {
     detailQuery.data?.videoInfo?.remarks,
   ]);
 
+  /**
+   * 源不可用时的处理：先自动换源，失败再弹面板。
+   *
+   * 为什么自动试一次：采集站的片源经常中途失效，用户此时只想「继续看」，
+   * 不该被要求自己回去找源。这里用同片名自动搜下一个可用源，
+   * 成功就直接跳过去（带原进度），失败才把换源面板摆出来让用户挑。
+   */
+  const handleSourceUnavailable = useCallback(
+    async (reason: string) => {
+      // 同一集只自动尝试一次，避免源都挂了时无限循环跳转
+      if (autoSwitchedRef.current) {
+        setSwitchOpen(true);
+        return;
+      }
+      autoSwitchedRef.current = true;
+
+      toast(`${reason}，正在自动寻找其他源...`, 'info');
+
+      try {
+        // 用当前选中的源去搜（与首页搜索同一套逻辑），拿回聚合结果
+        const st = useAppStore.getState();
+        const selected = [...st.envSources, ...st.customAPIs].filter((a) =>
+          st.selectedKeys.includes(a.key)
+        );
+        if (selected.length === 0) {
+          setSwitchOpen(true);
+          return;
+        }
+        const res = await api.search(videoTitle.slice(0, 100), selected, st.yellowFilter);
+        // 排除当前源，优先同名（片名归一化后比较）
+        const currentTitle = videoTitle.trim().toLowerCase();
+        const candidates = res.list.filter(
+          (item) =>
+            item.sourceKey !== sourceKey &&
+            item.name.trim().toLowerCase() === currentTitle
+        );
+
+        if (candidates.length === 0) {
+          setSwitchOpen(true);
+          return;
+        }
+
+        const next = candidates[0];
+        // 带上原集的进度：换源后从同一位置续看
+        const resumeAt = await getRestorePosition();
+        const sp = new URLSearchParams();
+        sp.set('source', next.sourceKey);
+        sp.set('id', next.vodId);
+        sp.set('index', String(currentIndex));
+        sp.set('title', next.name);
+        if (next.sourceUrl) sp.set('sourceUrl', next.sourceUrl);
+        if (resumeAt > 30) sp.set('position', String(Math.floor(resumeAt)));
+
+        toast(`已自动切换到「${next.sourceName}」`, 'success');
+        router.replace(`/watch?${sp.toString()}`, { scroll: false });
+      } catch {
+        // 搜索失败就退回到手动换源，不挡住用户
+        setSwitchOpen(true);
+      }
+    },
+    [videoTitle, sourceKey, currentIndex, getRestorePosition, router, toast]
+  );
+
   // 快捷键（Shift+I/O/S/E）记录片段：校验后写入
   const handleRecordSegment = useCallback(
     (segment: SkipSegment) => {
@@ -387,6 +457,8 @@ function WatchContent() {
                   onTimeUpdate={handleProgress}
                   onPause={handleProgress}
                   onEnded={handleEnded}
+                  // 播放器判源不可用（重试耗尽/格式硬失败）：自动换源而非干等
+                  onRequestSwitchSource={handleSourceUnavailable}
                   hasPrevEpisode={currentIndex > 0}
                   hasNextEpisode={episodes.length > 0 && currentIndex < episodes.length - 1}
                   onPrevEpisode={() => goEpisode(currentIndex - 1)}

@@ -19,6 +19,8 @@ export interface SyncWatchlist {
   totalEpisodes?: number;
   playbackPosition?: number;
   duration?: number;
+  knownEpisodes?: number;
+  hasNewEpisodes?: boolean | number;
   lastSourceKey?: string | null;
   lastSourceUrl?: string | null;
   lastVodId?: string | null;
@@ -74,6 +76,7 @@ export function readAll() {
       `SELECT id, title, pic, type_name AS typeName, year, area, remarks, status,
               episode_index AS episodeIndex, total_episodes AS totalEpisodes,
               playback_position AS playbackPosition, duration,
+              known_episodes AS knownEpisodes, has_new_episodes AS hasNewEpisodes,
               last_source_key AS lastSourceKey, last_source_url AS lastSourceUrl,
               last_vod_id AS lastVodId, created_at AS createdAt, updated_at AS updatedAt
        FROM watchlist ORDER BY updated_at DESC`
@@ -92,6 +95,12 @@ export function readAll() {
   const progress = db
     .prepare(`SELECT id, position, duration, updated_at AS updatedAt FROM progress`)
     .all();
+
+  // SQLite 没有布尔类型，统一在出口转成 true/false，前端拿到的形状才稳定
+  const watchlistNormalized = (watchlist as Record<string, unknown>[]).map((row) => ({
+    ...row,
+    hasNewEpisodes: Boolean(row.hasNewEpisodes),
+  }));
 
   const customRows = db
     .prepare(
@@ -118,7 +127,14 @@ export function readAll() {
     }
   }
 
-  return { watchlist, history, progress, customSources, liveSources, settings };
+  return {
+    watchlist: watchlistNormalized,
+    history,
+    progress,
+    customSources,
+    liveSources,
+    settings,
+  };
 }
 
 /**
@@ -138,14 +154,17 @@ export function writeAll(payload: SyncPayload): void {
         `INSERT INTO watchlist (
            id, title, pic, type_name, year, area, remarks, status,
            episode_index, total_episodes, playback_position, duration,
+           known_episodes, has_new_episodes,
            last_source_key, last_source_url, last_vod_id, created_at, updated_at
-         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(id) DO UPDATE SET
            title=excluded.title, pic=excluded.pic, type_name=excluded.type_name,
            year=excluded.year, area=excluded.area, remarks=excluded.remarks,
            status=excluded.status, episode_index=excluded.episode_index,
            total_episodes=excluded.total_episodes,
            playback_position=excluded.playback_position, duration=excluded.duration,
+           known_episodes=excluded.known_episodes,
+           has_new_episodes=excluded.has_new_episodes,
            last_source_key=excluded.last_source_key, last_source_url=excluded.last_source_url,
            last_vod_id=excluded.last_vod_id, updated_at=excluded.updated_at
          WHERE excluded.updated_at >= watchlist.updated_at`
@@ -154,6 +173,7 @@ export function writeAll(payload: SyncPayload): void {
         item.area ?? null, item.remarks ?? null, item.status,
         item.episodeIndex ?? 0, item.totalEpisodes ?? 0,
         item.playbackPosition ?? 0, item.duration ?? 0,
+        item.knownEpisodes ?? 0, item.hasNewEpisodes ? 1 : 0,
         item.lastSourceKey ?? null, item.lastSourceUrl ?? null, item.lastVodId ?? null,
         item.createdAt ?? Date.now(), item.updatedAt ?? Date.now()
       );
@@ -179,6 +199,15 @@ export function writeAll(payload: SyncPayload): void {
         item.playbackPosition ?? 0, item.duration ?? 0, item.timestamp ?? Date.now()
       );
     }
+
+    // 历史表上限对齐本地 MAX_HISTORY：只留最近 100 条。
+    // 不做这个淘汰，服务端会无限增长（本地有淘汰、服务端没有，长期跑会失控）。
+    const HISTORY_CAP = 100;
+    db.prepare(
+      `DELETE FROM history WHERE id NOT IN (
+         SELECT id FROM history ORDER BY timestamp DESC LIMIT ?
+       )`
+    ).run(HISTORY_CAP);
 
     for (const item of payload.progress ?? []) {
       if (!item.id) continue;

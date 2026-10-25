@@ -122,6 +122,8 @@ export async function collectLocalPayload() {
       totalEpisodes: w.totalEpisodes ?? 0,
       playbackPosition: w.playbackPosition ?? 0,
       duration: w.duration ?? 0,
+      knownEpisodes: w.knownEpisodes ?? 0,
+      hasNewEpisodes: w.hasNewEpisodes ?? false,
       lastSourceKey: w.lastSourceKey ?? null,
       lastSourceUrl: w.lastSourceUrl ?? null,
       lastVodId: w.lastVodId ?? null,
@@ -199,6 +201,8 @@ export async function pullFromServer(): Promise<boolean> {
             totalEpisodes: w.totalEpisodes ?? 0,
             playbackPosition: w.playbackPosition ?? 0,
             duration: w.duration ?? 0,
+            knownEpisodes: w.knownEpisodes ?? 0,
+            hasNewEpisodes: Boolean(w.hasNewEpisodes),
           }))
         );
       }

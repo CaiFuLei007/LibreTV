@@ -22,6 +22,7 @@ import {
 } from '@/lib/watchlist';
 import { buildWatchUrl, cn, formatRelativeTime, formatTime } from '@/lib/utils';
 import { resolveSource, useAppStore } from '@/lib/store';
+import { acknowledgeEpisodes, checkNewEpisodes } from '@/lib/episode-tracker';
 
 /**
  * 收藏夹抽屉：想看 / 在看 / 已看三个标签共享同一份骨架。
@@ -55,6 +56,18 @@ export function WatchlistPanel({ open, onClose }: { open: boolean; onClose: () =
     for (const r of all) acc[r.status] += 1;
     return acc;
   }, []);
+
+  // 打开收藏面板时补跑一次集数检测（内部有 6 小时节流，不会每次都拉）
+  useEffect(() => {
+    if (!open) return;
+    void checkNewEpisodes().then((updates) => {
+      if (updates.length > 0) {
+        const total = updates.reduce((n, u) => n + u.added, 0);
+        toast(`有 ${updates.length} 部剧集更新（共 ${total} 集）`, 'info');
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const keyword = query.trim().toLowerCase();
   const visible = useMemo(() => {
@@ -251,6 +264,10 @@ function WatchlistItem({ entry }: { entry: WatchlistEntry }) {
         href={searchHref}
         className="block bg-card hover:bg-hover rounded-lg p-3 pr-10 transition-colors"
         title={`搜索「${entry.title}」以选择播放源`}
+        onClick={() => {
+          // 用户要去看这部剧了：红点使命完成，已知集数推进到最新
+          void acknowledgeEpisodes(entry.title);
+        }}
       >
         <div className="flex items-center gap-3">
           {entry.pic && !imgFailed ? (
@@ -268,7 +285,17 @@ function WatchlistItem({ entry }: { entry: WatchlistEntry }) {
             </div>
           )}
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium text-content truncate">{entry.title}</div>
+            <div className="flex items-center gap-1.5">
+              <div className="text-sm font-medium text-content truncate">{entry.title}</div>
+              {entry.hasNewEpisodes && (
+                <span
+                  className="shrink-0 tag bg-danger/15 text-danger font-medium"
+                  title={`已更新到第 ${entry.totalEpisodes} 集，点开后可清除提示`}
+                >
+                  新增
+                </span>
+              )}
+            </div>
             <div className="text-xs text-faint mt-0.5 flex items-center gap-1.5 flex-wrap">
               {entry.totalEpisodes > 0 && (
                 <span>
