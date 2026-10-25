@@ -10,6 +10,7 @@ import { SmartImage } from './smart-image';
 import { QualityBadge } from './quality-badge';
 import { useQualityProbe } from './use-quality-probe';
 import { useInView } from './use-in-view';
+import { WatchlistActions, seedOf } from './watchlist-actions';
 
 // —— 跨源同名聚合 ——
 
@@ -212,9 +213,10 @@ export function AggregatedCard({
             <p className="text-xs text-muted line-clamp-2 mb-2">{group.remarks || '暂无介绍'}</p>
           </div>
           <div className="flex items-center justify-between gap-1.5 mt-auto pt-1.5 border-t border-line">
-            <span className="tag bg-chip text-muted truncate max-w-[80%]">
+            <span className="tag bg-chip text-muted truncate max-w-[60%]">
               {multi ? `${group.items.length} 个来源` : group.items[0].sourceName}
             </span>
+            <WatchlistActions seed={seedOf(group.items[0])} className="shrink-0" />
             {multi && (
               <span className="flex items-center gap-1 shrink-0">
                 {/* 收起态先给结论：最高画质比「N 个来源」更影响要不要点开 */}

@@ -24,7 +24,13 @@ export type IconName =
   | 'link'
   | 'alert'
   | 'gear'
-  | 'home';
+  | 'home'
+  | 'bookmark'
+  | 'play'
+  | 'eye'
+  | 'bookmarkSolid'
+  | 'playSolid'
+  | 'checkSolid';
 
 const PATHS: Record<IconName, ReactNode> = {
   close: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />,
@@ -139,6 +145,54 @@ const PATHS: Record<IconName, ReactNode> = {
       strokeLinejoin="round"
       strokeWidth={2}
       d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75"
+    />
+  ),
+  bookmark: (
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M17.593 3.322c.1.128.157.29.157.457v16.471a.75.75 0 0 1-1.174.62L12 17.273l-5.576 3.597a.75.75 0 0 1-1.174-.62V3.779c0-.167.057-.329.157-.457A3.375 3.375 0 0 1 8.25 2.25h7.5a3.375 3.375 0 0 1 1.843 1.072Z"
+    />
+  ),
+  bookmarkSolid: (
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      fill="currentColor"
+      d="M17.593 3.322c.1.128.157.29.157.457v16.471a.75.75 0 0 1-1.174.62L12 17.273l-5.576 3.597a.75.75 0 0 1-1.174-.62V3.779c0-.167.057-.329.157-.457A3.375 3.375 0 0 1 8.25 2.25h7.5a3.375 3.375 0 0 1 1.843 1.072Z"
+    />
+  ),
+  play: (
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"
+    />
+  ),
+  playSolid: (
+    <path
+      fill="currentColor"
+      d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"
+    />
+  ),
+  eye: (
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.964-7.178Z"
+    />
+  ),
+  checkSolid: (
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      fill="currentColor"
+      d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12Zm13.36-1.814a.75.75 0 1 0-1.22-.872l-3.236 4.53-1.71-1.71a.75.75 0 0 0-1.06 1.06l2.75 2.75a.75.75 0 0 0 1.14-.094l3.336-4.664Z"
     />
   ),
 };

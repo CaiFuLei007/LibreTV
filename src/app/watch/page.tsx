@@ -34,6 +34,7 @@ import {
   upsertHistory,
   db,
 } from '@/lib/db';
+import { applyPlaybackProgress } from '@/lib/watchlist';
 import { cn } from '@/lib/utils';
 
 /**
@@ -191,9 +192,22 @@ function WatchContent() {
       if (vodId) {
         saveProgress(sourceKey, vodId, currentIndex, position, duration).catch(() => {});
         updateHistoryProgress(sourceKey, vodId || currentUrl, position, duration).catch(() => {});
+        // 播完或 90% 即无条件进「已看」（此前未收藏也建档收录）
+        applyPlaybackProgress(
+          { sourceKey, sourceUrl: source?.url, vodId, episodeIndex: currentIndex, position, duration },
+          {
+            title: videoTitle,
+            pic: detailQuery.data?.videoInfo?.cover,
+            typeName: detailQuery.data?.videoInfo?.typeName,
+            year: detailQuery.data?.videoInfo?.year,
+            area: detailQuery.data?.videoInfo?.area,
+            remarks: detailQuery.data?.videoInfo?.remarks,
+            totalEpisodes: episodes.length,
+          }
+        ).catch(() => {});
       }
     },
-    [sourceKey, vodId, currentIndex, currentUrl]
+    [sourceKey, vodId, currentIndex, currentUrl, videoTitle, detailQuery.data, episodes.length, source?.url]
   );
 
   // 自动连播的 800ms 延迟切集要在卸载时取消，避免离开页面后跳转
@@ -203,11 +217,50 @@ function WatchContent() {
   }, []);
 
   const handleEnded = useCallback(() => {
-    if (vodId) clearProgress(sourceKey, vodId, currentIndex).catch(() => {});
+    if (vodId) {
+      clearProgress(sourceKey, vodId, currentIndex).catch(() => {});
+      // 播完是「看完」最确定的信号：进度上报可能因最后一次 seek 丢失，
+      // 这里用 100% 再补一次，确保该集对应的收藏项落到「已看」
+      const duration = playerApiRef.current?.getDuration() ?? 0;
+      applyPlaybackProgress(
+        {
+          sourceKey,
+          sourceUrl: source?.url,
+          vodId,
+          episodeIndex: currentIndex,
+          position: duration > 0 ? duration : 1,
+          duration: duration > 0 ? duration : 1,
+        },
+        {
+          title: videoTitle,
+          pic: detailQuery.data?.videoInfo?.cover,
+          typeName: detailQuery.data?.videoInfo?.typeName,
+          year: detailQuery.data?.videoInfo?.year,
+          area: detailQuery.data?.videoInfo?.area,
+          remarks: detailQuery.data?.videoInfo?.remarks,
+          totalEpisodes: episodes.length,
+        }
+      ).catch(() => {});
+    }
     if (store.autoplayNext && currentIndex < episodes.length - 1) {
       autoNextTimer.current = setTimeout(() => goEpisode(currentIndex + 1), 800);
     }
-  }, [store.autoplayNext, currentIndex, episodes.length, goEpisode, sourceKey, vodId]);
+  }, [
+    store.autoplayNext,
+    currentIndex,
+    episodes.length,
+    goEpisode,
+    sourceKey,
+    vodId,
+    // 收藏入库要用到片名与详情元数据，漏了这些依赖会写进上一次的旧标题
+    videoTitle,
+    source?.url,
+    detailQuery.data?.videoInfo?.cover,
+    detailQuery.data?.videoInfo?.typeName,
+    detailQuery.data?.videoInfo?.year,
+    detailQuery.data?.videoInfo?.area,
+    detailQuery.data?.videoInfo?.remarks,
+  ]);
 
   // 快捷键（Shift+I/O/S/E）记录片段：校验后写入
   const handleRecordSegment = useCallback(
