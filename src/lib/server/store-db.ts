@@ -53,6 +53,10 @@ function migrate(d: DatabaseSync): void {
       total_episodes   INTEGER NOT NULL DEFAULT 0,
       playback_position REAL NOT NULL DEFAULT 0,
       duration         REAL NOT NULL DEFAULT 0,
+      -- 用户已知的集数（上次查看时的总集数），用于计算「新增 N 集」
+      known_episodes   INTEGER NOT NULL DEFAULT 0,
+      -- 集数有更新时置 1，列表上打红点；用户点开详情后清除
+      has_new_episodes INTEGER NOT NULL DEFAULT 0,
       last_source_key  TEXT,
       last_source_url  TEXT,
       last_vod_id      TEXT,
@@ -115,6 +119,19 @@ function migrate(d: DatabaseSync): void {
       updated_at INTEGER NOT NULL
     );
   `);
+
+  // 列级迁移：CREATE TABLE IF NOT EXISTS 对已存在的表不生效，
+  // 新增字段必须显式 ALTER。SQLite 没有 ADD COLUMN IF NOT EXISTS，
+  // 故先查当前列再补，保证升级/新建两条路径都能到达最终结构。
+  const cols = new Set(
+    (d.prepare('PRAGMA table_info(watchlist)').all() as { name: string }[]).map((c) => c.name)
+  );
+  if (!cols.has('known_episodes')) {
+    d.exec('ALTER TABLE watchlist ADD COLUMN known_episodes INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!cols.has('has_new_episodes')) {
+    d.exec('ALTER TABLE watchlist ADD COLUMN has_new_episodes INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 /** 是否已配置服务端持久化目录可写（供健康检查） */

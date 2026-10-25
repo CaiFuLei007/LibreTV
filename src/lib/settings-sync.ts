@@ -1,6 +1,6 @@
 'use client';
 
-import { PERSIST_KEY } from './persist-storage';
+import { PERSIST_KEY, flushPendingPersist } from './persist-storage';
 
 /**
  * 设置与视频源的跨设备同步。
@@ -43,6 +43,10 @@ function snapshotHasContent(raw: string | null): boolean {
 
 /** 推送本地设置快照到服务端 */
 export async function pushSettings(): Promise<boolean> {
+  // 关键：store 的写盘是 800ms 节流的，而同步是在 1.2s 防抖后触发的。
+  // 不先 flush 就可能把「上一次」的旧快照传上去——跳过标记、视频源
+  // 这类刚改的内容会静默丢失（本地看着对，换设备就没了）。
+  flushPendingPersist();
   const raw = readLocalSnapshot();
   // 空快照不上行：否则新设备一打开就把服务端的源配置清空
   if (!snapshotHasContent(raw)) return false;
