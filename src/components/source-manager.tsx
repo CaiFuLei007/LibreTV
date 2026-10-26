@@ -31,6 +31,7 @@ import { useAuth } from './auth';
 import { api } from '@/lib/client-api';
 import { AUTO_REFRESH_MAX_FAIL_STREAK, syncSourceSubscription } from '@/lib/subscription-sync';
 import { describeParseStats } from '@/lib/tvbox-parser';
+import { PalettePicker, PaletteHint } from './theme';
 
 /**
  * 设置抽屉：顶部两级导航。
@@ -40,7 +41,7 @@ import { describeParseStats } from '@/lib/tvbox-parser';
  */
 
 type PrimaryTab = 'sources' | 'prefs' | 'data';
-type SecondaryTab = 'vod' | 'live' | 'subs' | 'playback' | 'image' | 'home' | 'io';
+type SecondaryTab = 'vod' | 'live' | 'subs' | 'playback' | 'appearance' | 'image' | 'home' | 'io';
 
 const PRIMARY_TABS: { id: PrimaryTab; label: string; icon: IconName }[] = [
   { id: 'sources', label: '源管理', icon: 'link' },
@@ -56,6 +57,7 @@ const SECONDARY_TABS: Record<PrimaryTab, { id: SecondaryTab; label: string }[]> 
   ],
   prefs: [
     { id: 'playback', label: '播放与过滤' },
+    { id: 'appearance', label: '外观配色' },
     { id: 'image', label: '封面图加载' },
     { id: 'home', label: '首页与内容' },
   ],
@@ -134,6 +136,7 @@ export function SourceManagerDrawer({ open, onClose }: { open: boolean; onClose:
       {current === 'vod' && <VodSourcesPanel />}
       {current === 'live' && <LiveSourceManager />}
       {current === 'playback' && <PlaybackPanel />}
+      {current === 'appearance' && <AppearancePanel />}
       {current === 'image' && <ImagePanel />}
       {current === 'home' && <HomePanel />}
       {current === 'subs' && <SourceSubscriptions />}
@@ -667,6 +670,22 @@ function VideoCachePanel() {
         </button>
       </div>
     </div>
+  );
+}
+
+function AppearancePanel() {
+  return (
+    <section>
+      <SectionTitle title="外观配色" hint="即时生效，全局跟随" />
+      <PalettePicker />
+      <PaletteHint />
+      <div className="mt-5">
+        <SectionTitle title="主题模式" hint="浅色 / 深色 / 跟随系统，用顶栏按钮切换" />
+        <p className="text-[11px] text-faint">
+          每套配色都同时给出了浅色与深色两套取值。深色是本项目的主场景。
+        </p>
+      </div>
+    </section>
   );
 }
 

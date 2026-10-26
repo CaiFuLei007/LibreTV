@@ -177,11 +177,14 @@ function IconButton({
     >
       {children}
       {badge && (
-        // 绝对定位到右上角；ring 用表面色描边，图标描边重叠时仍能分清
+        // 文字徽标而非裸红点：红点在 24px 图标上没有语义，也容易被当成装饰。
+        // 走 danger 语义 token，ring 用表面色描边，图标描边重叠时仍能分清。
         <span
-          className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500 ring-2 ring-surface"
+          className="absolute -top-0.5 -right-0.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-danger px-1 text-[9px] font-bold leading-none tracking-[0.04em] text-white ring-2 ring-page"
           aria-hidden="true"
-        />
+        >
+          新
+        </span>
       )}
     </button>
   );

@@ -146,7 +146,7 @@ export function AggregatedCard({
   return (
     <div
       ref={inViewRef}
-      className={cn('card', !multi && 'hover:scale-[1.02] hover:shadow-md', multi && expanded && 'ring-1 ring-accent/40')}
+      className={cn('card', !multi && 'hover:scale-[1.03] hover:shadow-hover', multi && expanded && 'ring-1 ring-accent/40')}
     >
       {/* 不用 h-full：展开面板需要撑高卡片，等高裁切会让面板不可见 */}
       <div
@@ -342,7 +342,7 @@ export function VideoCard({ item, onClick }: { item: SearchResultItem; onClick: 
 
   return (
     <div
-      className="card cursor-pointer hover:scale-[1.02] hover:shadow-md h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="card cursor-pointer hover:scale-[1.03] hover:shadow-hover h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
       role="button"
       tabIndex={0}
       onClick={onClick}
@@ -404,7 +404,7 @@ export function DoubanCard({ item, onClick }: { item: { title: string; cover: st
 
   return (
     <div
-      className="card cursor-pointer hover:scale-[1.03] hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="card cursor-pointer hover:scale-[1.03] hover:shadow-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
       role="button"
       tabIndex={0}
       onClick={onClick}

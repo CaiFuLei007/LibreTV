@@ -3,8 +3,9 @@
 @tailwind utilities;
 
 /*
- * 语义化配色（RGB 三元组，供 Tailwind 以 <alpha-value> 注入透明度）：
- * 深色主题沿用旧版 LibreTV 配色；浅色主题为对应的白底变体。
+ * 语义化配色（RGB 三元组，供 Tailwind 以 <alpha-value> 注入透明度）。
+ * 默认调色板 cyber = 旧版「赛博影视」；另外四套通过 html[data-palette] 覆盖，
+ * 每套都同时给出亮色（:root 段）与暗色（.dark 段）两组取值。
  */
 :root {
   --c-page: 246 247 249;           /* #f6f7f9 */
@@ -16,64 +17,298 @@
   --c-line: 224 227 232;           /* #e0e3e8 */
   --c-content: 26 26 26;           /* #1a1a1a */
   --c-muted: 95 99 104;            /* #5f6368 */
-  --c-faint: 107 114 128;          /* #6b7280（原 #8a8f98 对白底仅 3.2:1，加深后达到 AA 4.5:1） */
+  --c-faint: 107 114 128;          /* #6b7280 */
   --c-accent: 37 99 235;           /* blue-600 */
   --c-accent-hover: 29 78 216;     /* blue-700 */
-  --c-on-accent: 255 255 255;      /* accent 实心底上的文字色 */
-  /* 语义状态色（亮色主题取偏深值，保证浅底上的对比度） */
-  --c-danger: 220 38 38;           /* red-600 */
-  --c-danger-hover: 185 28 28;     /* red-700 */
-  --c-success: 22 163 74;          /* green-600 */
-  --c-warning: 217 119 6;          /* amber-600 */
-  --c-info: 37 99 235;             /* blue-600 */
-  --c-rating: 245 158 11;          /* amber-500 */
-  /* 实心状态底色（配白字）：比「文字用」色更深一档，保证白字对比度 ≥ 4.5:1 */
-  --c-danger-solid: 185 28 28;     /* red-700 */
-  --c-success-solid: 21 128 61;    /* green-700 */
-  --c-warning-solid: 180 83 9;     /* amber-700 */
-  --c-info-solid: 29 78 216;       /* blue-700 */
+  --c-on-accent: 255 255 255;
+  --c-danger: 220 38 38;
+  --c-danger-hover: 185 28 28;
+  --c-success: 22 163 74;
+  --c-warning: 217 119 6;
+  --c-info: 37 99 235;
+  --c-rating: 245 158 11;
+  --c-danger-solid: 185 28 28;
+  --c-success-solid: 21 128 61;
+  --c-warning-solid: 180 83 9;
+  --c-info-solid: 29 78 216;
+
+  /* 圆角与阴影：Netflix 规范 —— 卡片 6px、按钮/输入 4px，刻意压掉大圆角 */
+  --radius-card: 6px;
+  --radius-control: 4px;
+  /* 阴影一律纯黑，靠明度而非彩色发光制造层次 */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.10);
+  --shadow-lg: 0 8px 24px rgb(0 0 0 / 0.14);
+  --shadow-xl: 0 8px 28px rgb(0 0 0 / 0.16);
+  --shadow-2xl: 0 16px 48px rgb(0 0 0 / 0.22);
+  --shadow-hover: 0 12px 24px rgb(0 0 0 / 0.16);
   color-scheme: light;
 }
 
 .dark {
-  /* 旧版 LibreTV（backup-2025）赛博影视主题（整体调深一档）：深蓝黑底 + 霓虹蓝/粉点缀 */
-  --c-page: 11 16 26;              /* #0b101a 深蓝黑页面底色 */
-  --c-surface: 20 28 41;           /* #141c29 弹窗/抽屉底色 */
+  /* 默认暗色：旧版 LibreTV 赛博影视主题 */
+  --c-page: 11 16 26;              /* #0b101a */
+  --c-surface: 20 28 41;           /* #141c29 */
   --c-surface-raised: 20 28 41;
-  --c-card: 13 20 31;              /* #0d141f 卡片底色 */
-  --c-chip: 22 32 46;              /* #16202e 卡片/输入框底色 */
-  --c-hover: 29 42 61;             /* #1d2a3d 悬停态（chip 提亮） */
-  --c-line: 34 48 69;              /* #223045 边框（近似旧版 rgba(0,204,255,.15) 观感） */
-  --c-content: 230 242 255;        /* #e6f2ff 蓝白主文本（--text-color） */
-  --c-muted: 133 153 178;          /* #8599b2 次级文本（--text-muted） */
-  --c-faint: 122 140 166;          /* #7a8ca6 三级文本（原 #6b7f99 在抽屉底色 #141c29 上仅 4.17:1，12px 小字不达标；提亮后 4.99:1） */
-  --c-accent: 0 184 230;           /* #00b8e6 霓虹蓝主色（--primary-color 调深一档） */
-  --c-accent-hover: 51 214 255;    /* #33d6ff 霓虹蓝浅变体（--primary-light） */
-  /* 霓虹蓝底亮度过高（对白字仅 2.35:1），暗色下实心底改用深色文字 */
+  --c-card: 13 20 31;              /* #0d141f */
+  --c-chip: 22 32 46;              /* #16202e */
+  --c-hover: 29 42 61;             /* #1d2a3d */
+  --c-line: 34 48 69;              /* #223045 */
+  --c-content: 230 242 255;        /* #e6f2ff */
+  --c-muted: 133 153 178;          /* #8599b2 */
+  --c-faint: 122 140 166;          /* #7a8ca6 */
+  --c-accent: 0 184 230;           /* #00b8e6 */
+  --c-accent-hover: 51 214 255;    /* #33d6ff */
   --c-on-accent: 8 19 31;
-  /* 语义状态色（暗色主题取中等明度值，保证深蓝黑底上的对比度） */
-  --c-danger: 239 68 68;           /* red-500 */
-  --c-danger-hover: 248 113 113;   /* red-400 */
-  --c-success: 34 197 94;          /* green-500 */
-  --c-warning: 245 158 11;         /* amber-500 */
-  --c-info: 59 130 246;            /* blue-500 */
-  --c-rating: 251 191 36;          /* amber-400 */
-  /* 实心状态底色（配白字）：与亮色一致取深档，避免琥珀/绿色底白字对比度不足 */
-  --c-danger-solid: 185 28 28;     /* red-700 */
-  --c-success-solid: 21 128 61;    /* green-700 */
-  --c-warning-solid: 180 83 9;     /* amber-700 */
-  --c-info-solid: 29 78 216;       /* blue-700 */
+  --c-danger: 239 68 68;
+  --c-danger-hover: 248 113 113;
+  --c-success: 34 197 94;
+  --c-warning: 245 158 11;
+  --c-info: 59 130 246;
+  --c-rating: 251 191 36;
+  --c-danger-solid: 185 28 28;
+  --c-success-solid: 21 128 61;
+  --c-warning-solid: 180 83 9;
+  --c-info-solid: 29 78 216;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.5);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.6);
+  --shadow-lg: 0 6px 16px rgb(0 0 0 / 0.7);
+  --shadow-xl: 0 6px 16px rgb(0 0 0 / 0.7);
+  --shadow-2xl: 0 8px 32px rgb(0 0 0 / 0.9);
+  --shadow-hover: 0 12px 24px rgb(0 0 0 / 0.8);
   color-scheme: dark;
 }
 
-html,
-body {
-  @apply bg-page text-content antialiased;
+/* ---------- 调色板 A：影院黑（Netflix 派） ---------- */
+[data-palette='cinema'] {
+  --c-page: 255 255 255;
+  --c-surface: 247 247 248;
+  --c-surface-raised: 255 255 255;
+  --c-card: 255 255 255;
+  --c-chip: 240 240 241;
+  --c-hover: 232 232 234;
+  --c-line: 214 214 214;
+  --c-content: 20 20 20;
+  --c-muted: 82 82 82;
+  --c-faint: 110 110 110;
+  --c-accent: 200 8 18;
+  --c-accent-hover: 160 6 14;
+  --c-on-accent: 255 255 255;
+  --c-danger: 200 8 18;
+  --c-danger-hover: 160 6 14;
+  --c-success: 22 163 74;
+  --c-warning: 180 83 9;
+  --c-info: 37 99 235;
+  --c-rating: 22 163 74;
+  --c-danger-solid: 178 7 16;
+  --c-success-solid: 25 128 61;
+  --c-warning-solid: 180 83 9;
+  --c-info-solid: 29 78 216;
+}
+.dark[data-palette='cinema'] {
+  --c-page: 20 20 20;              /* #141414 影院画布 */
+  --c-surface: 24 24 24;           /* #181818 */
+  --c-surface-raised: 24 24 24;
+  --c-card: 24 24 24;
+  --c-chip: 47 47 47;              /* #2F2F2F */
+  --c-hover: 47 47 47;
+  --c-line: 64 64 64;              /* #404040 */
+  --c-content: 255 255 255;
+  --c-muted: 179 179 179;          /* #B3B3B3 Netflix 灰 */
+  --c-faint: 142 142 142;          /* #8E8E8E（原 Netflix #808080 在 #181818 上仅 4.50:1，提亮后留余量） */
+  --c-accent: 229 9 20;            /* #E50914 */
+  --c-accent-hover: 178 7 16;      /* #B20710 */
+  --c-on-accent: 255 255 255;
+  --c-danger: 229 9 20;
+  --c-danger-hover: 178 7 16;
+  --c-success: 70 211 105;
+  --c-warning: 232 124 3;
+  --c-info: 96 165 250;
+  --c-rating: 70 211 105;
+  --c-danger-solid: 178 7 16;
+  --c-success-solid: 25 128 61;
+  --c-warning-solid: 180 83 9;
+  --c-info-solid: 29 78 216;
 }
 
-/* 暗色主题：模拟旧版 .page-bg 的深蓝黑纵向渐变 */
-.dark body {
-  background: linear-gradient(180deg, rgb(11 16 26), rgb(20 28 41)) fixed;
+/* ---------- 调色板 B：炭灰冷青 ---------- */
+[data-palette='graphite'] {
+  --c-page: 250 250 251;
+  --c-surface: 255 255 255;
+  --c-surface-raised: 255 255 255;
+  --c-card: 255 255 255;
+  --c-chip: 241 241 243;
+  --c-hover: 234 234 237;
+  --c-line: 228 228 231;
+  --c-content: 24 24 27;
+  --c-muted: 82 82 91;
+  --c-faint: 113 113 122;
+  --c-accent: 14 116 144;          /* #0E7490（cyan-700；cyan-600 对白字仅 3.68:1） */
+  --c-accent-hover: 21 94 117;     /* #155E75 */
+  --c-on-accent: 255 255 255;
+  --c-danger: 220 38 38;
+  --c-danger-hover: 185 28 28;
+  --c-success: 22 163 74;
+  --c-warning: 217 119 6;
+  --c-info: 2 132 199;
+  --c-rating: 217 119 6;
+  --c-danger-solid: 185 28 28;
+  --c-success-solid: 21 128 61;
+  --c-warning-solid: 180 83 9;
+  --c-info-solid: 29 78 216;
+}
+.dark[data-palette='graphite'] {
+  --c-page: 18 18 21;              /* #121215 */
+  --c-surface: 24 24 27;           /* #18181B */
+  --c-surface-raised: 24 24 27;
+  --c-card: 24 24 27;
+  --c-chip: 39 39 42;              /* #27272A */
+  --c-hover: 45 45 48;             /* #2D2D30 */
+  --c-line: 63 63 70;              /* #3F3F46 */
+  --c-content: 244 244 245;
+  --c-muted: 161 161 170;
+  --c-faint: 142 142 150;          /* #8E8E96（原 #71717A 仅 3.67:1） */
+  --c-accent: 34 211 238;          /* #22D3EE */
+  --c-accent-hover: 103 232 249;   /* #67E8F9 */
+  --c-on-accent: 9 9 11;           /* 浅青底用深字 */
+  --c-danger: 248 113 113;
+  --c-danger-hover: 252 165 165;
+  --c-success: 74 222 128;
+  --c-warning: 251 191 36;
+  --c-info: 96 165 250;
+  --c-rating: 251 191 36;
+  --c-danger-solid: 185 28 28;
+  --c-success-solid: 21 128 61;
+  --c-warning-solid: 180 83 9;
+  --c-info-solid: 29 78 216;
+}
+
+/* ---------- 调色板 C：深紫番剧（Laftel 派） ---------- */
+[data-palette='violet'] {
+  --c-page: 255 255 255;
+  --c-surface: 247 247 250;
+  --c-surface-raised: 255 255 255;
+  --c-card: 255 255 255;
+  --c-chip: 240 237 255;           /* #F0EDFF */
+  --c-hover: 217 211 255;          /* #D9D3FF */
+  --c-line: 238 238 238;
+  --c-content: 18 18 18;
+  --c-muted: 80 80 80;
+  --c-faint: 110 110 110;          /* #6E6E6E（原 #8A8A8A 仅 3.45:1） */
+  --c-accent: 110 88 255;          /* #6E58FF */
+  --c-accent-hover: 90 69 224;
+  --c-on-accent: 255 255 255;
+  --c-danger: 220 38 38;
+  --c-danger-hover: 185 28 28;
+  --c-success: 22 163 74;
+  --c-warning: 217 119 6;
+  --c-info: 37 99 235;
+  --c-rating: 217 119 6;
+  --c-danger-solid: 190 45 45;
+  --c-success-solid: 21 128 61;
+  --c-warning-solid: 180 83 9;
+  --c-info-solid: 76 56 210;
+}
+.dark[data-palette='violet'] {
+  --c-page: 15 15 20;              /* #0F0F14 */
+  --c-surface: 25 25 34;           /* #191922 */
+  --c-surface-raised: 25 25 34;
+  --c-card: 25 25 34;
+  --c-chip: 36 37 55;              /* #242537 */
+  --c-hover: 44 45 66;             /* #2C2D42 */
+  --c-line: 50 50 55;              /* #323237 */
+  --c-content: 247 247 247;
+  --c-muted: 171 171 171;          /* #ABABAB */
+  --c-faint: 138 138 138;
+  --c-accent: 110 88 255;          /* #6E58FF（比 Laftel #816BFF 深一档，过 AA） */
+  --c-accent-hover: 90 69 224;
+  --c-on-accent: 255 255 255;
+  --c-danger: 241 99 97;
+  --c-danger-hover: 255 16 16;
+  --c-success: 52 211 153;
+  --c-warning: 251 191 36;
+  --c-info: 110 88 255;
+  --c-rating: 251 191 36;
+  --c-danger-solid: 190 45 45;
+  --c-success-solid: 21 128 61;
+  --c-warning-solid: 180 83 9;
+  --c-info-solid: 76 56 210;
+}
+
+/* ---------- 调色板 D：琥珀暖墨（复古影评） ---------- */
+[data-palette='amber'] {
+  --c-page: 250 247 242;           /* #FAF7F2 */
+  --c-surface: 255 255 255;
+  --c-surface-raised: 255 255 255;
+  --c-card: 255 255 255;
+  --c-chip: 242 237 229;           /* #F2EDE5 */
+  --c-hover: 235 228 217;          /* #EBE4D9 */
+  --c-line: 226 218 205;           /* #E2DACD */
+  --c-content: 28 24 20;
+  --c-muted: 90 82 72;
+  --c-faint: 107 95 82;            /* #6B5F52（原 #8A7D6E 仅 4.01:1） */
+  --c-accent: 176 84 32;           /* #B05420 */
+  --c-accent-hover: 144 66 24;
+  --c-on-accent: 255 255 255;
+  --c-danger: 200 66 50;
+  --c-danger-hover: 170 48 34;
+  --c-success: 76 138 60;
+  --c-warning: 176 84 32;
+  --c-info: 70 110 180;
+  --c-rating: 176 84 32;
+  --c-danger-solid: 175 48 34;
+  --c-success-solid: 74 116 48;
+  --c-warning-solid: 160 100 30;
+  --c-info-solid: 58 92 150;
+}
+.dark[data-palette='amber'] {
+  --c-page: 26 22 19;              /* #1A1613 */
+  --c-surface: 34 29 24;           /* #221D18 */
+  --c-surface-raised: 34 29 24;
+  --c-card: 34 29 24;
+  --c-chip: 45 39 32;              /* #2D2720 */
+  --c-hover: 56 48 39;             /* #383027 */
+  --c-line: 64 55 45;              /* #40372D */
+  --c-content: 240 233 224;        /* #F0E9E0 */
+  --c-muted: 176 162 145;          /* #B0A291 */
+  --c-faint: 156 141 124;          /* #9C8D7C（原 #8A7D6E 仅 4.17:1） */
+  --c-accent: 224 169 74;          /* #E0A94A */
+  --c-accent-hover: 240 190 105;   /* #F0BE69 */
+  --c-on-accent: 26 22 19;         /* 琥珀底用深字 */
+  --c-danger: 232 105 90;
+  --c-danger-hover: 245 138 124;
+  --c-success: 122 179 108;
+  --c-warning: 224 169 74;
+  --c-info: 122 162 224;
+  --c-rating: 232 179 92;          /* #E8B35C */
+  --c-danger-solid: 175 48 34;
+  --c-success-solid: 74 116 48;
+  --c-warning-solid: 160 100 30;
+  --c-info-solid: 58 92 150;
+}
+
+/*
+ * 基础文字色给到 muted：正文默认是灰的，白只留给标题与每屏最关键的那一个标签
+ * （Netflix「灰让白有意义」）。标题与显式 text-content 的元素仍然是最亮的。
+ */
+html,
+body {
+  @apply bg-page text-muted antialiased;
+}
+
+/*
+ * 放进 base 层而不是裸写：裸写的元素选择器在级联层里优先级高于 @layer utilities，
+ * 会盖掉元素上显式写的 text-muted / text-faint。
+ */
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply text-content;
+  }
 }
 
 body {
@@ -81,14 +316,21 @@ body {
     'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }
 
+/* 主题切换过渡：只在切色时生效，避免影响布局动画 */
+html {
+  transition: background-color 0.2s ease;
+}
+
 @layer components {
   .card {
-    @apply bg-card border border-line rounded-lg overflow-hidden transition-all duration-200;
+    @apply bg-card border border-line overflow-hidden transition-all duration-200;
+    border-radius: var(--radius-card);
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+    border-radius: var(--radius-control);
     /* 统一焦点环：键盘用户可见，与 .input 同一规格 */
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60;
   }
   .btn-primary {
     @apply btn bg-accent text-on-accent hover:bg-accent-hover;
@@ -97,8 +339,9 @@ body {
     @apply btn bg-chip text-muted hover:bg-hover hover:text-content border border-line;
   }
   .input {
-    @apply bg-chip border border-line rounded-md px-3 py-2 text-sm text-content placeholder:text-faint;
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:border-accent;
+    @apply bg-chip border border-line px-3 py-2 text-sm text-content placeholder:text-faint;
+    border-radius: var(--radius-control);
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:border-accent;
   }
   .tag {
     @apply inline-flex items-center text-xs px-1.5 py-0.5 rounded-full;
@@ -129,30 +372,36 @@ body {
 .episode-active {
   background: rgb(var(--c-accent)) !important;
   border-color: rgb(var(--c-accent)) !important;
-  /* 暗色下霓虹蓝底对白字对比度不足，统一用 on-accent（亮色白 / 暗色深） */
   color: rgb(var(--c-on-accent)) !important;
 }
 
-/* 品牌渐变字（沿用旧版 LibreTV 的霓虹蓝→霓虹粉） */
+/*
+ * 品牌字：单一色相的明度梯度，跟着当前调色板走。
+ * 旧版是硬编码的霓虹蓝→霓虹粉双色，换任何配色都会打架。
+ */
 .brand-gradient {
-  background: linear-gradient(to right, #00ccff, #ff3c78);
+  background: linear-gradient(
+    to right,
+    rgb(var(--c-accent)),
+    color-mix(in srgb, rgb(var(--c-accent)) 55%, rgb(var(--c-content)) 45%)
+  );
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
 }
 
-/* LIVE 呼吸红点（直播页标识） */
+/* LIVE 呼吸红点（直播页标识）：跟随 danger 色 */
 .live-dot {
   width: 8px;
   height: 8px;
   border-radius: 9999px;
-  background: #ef4444;
+  background: rgb(var(--c-danger));
   animation: live-breathe 2s ease-in-out infinite;
 }
 @keyframes live-breathe {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
-  50% { opacity: 0.55; box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgb(var(--c-danger) / 0.5); }
+  50% { opacity: 0.55; box-shadow: 0 0 0 4px rgb(var(--c-danger) / 0); }
 }
 
 /*

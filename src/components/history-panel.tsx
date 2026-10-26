@@ -218,8 +218,8 @@ function HistoryItem({ item }: { item: HistoryEntry }) {
               <span>· {formatRelativeTime(item.timestamp)}</span>
             </div>
             {hasPercent && (
-              <div className="mt-1.5 h-1 bg-hover rounded-full overflow-hidden">
-                <div className="h-full bg-accent" style={{ width: `${percent}%` }} />
+              <div className="mt-1.5 h-[3px] bg-line rounded-full overflow-hidden">
+                <div className="h-full bg-accent rounded-full" style={{ width: `${percent}%` }} />
               </div>
             )}
           </div>

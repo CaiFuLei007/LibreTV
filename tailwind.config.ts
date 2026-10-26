@@ -43,6 +43,18 @@ const config: Config = {
         'warning-solid': 'rgb(var(--c-warning-solid) / <alpha-value>)',
         'info-solid': 'rgb(var(--c-info-solid) / <alpha-value>)',
       },
+      // 阴影改用 CSS 变量（globals.css 里按亮/暗给出纯黑取值），
+      // 深度只靠明度、不用彩色发光——与 Netflix / Twitch / Bilibili 实测一致。
+      boxShadow: {
+        sm: 'var(--shadow-sm)',
+        DEFAULT: 'var(--shadow-sm)',
+        md: 'var(--shadow-md)',
+        lg: 'var(--shadow-lg)',
+        xl: 'var(--shadow-xl)',
+        '2xl': 'var(--shadow-2xl)',
+        hover: 'var(--shadow-hover)',
+        none: 'none',
+      },
       keyframes: {
         'fade-in': { from: { opacity: '0' }, to: { opacity: '1' } },
         'slide-up': {

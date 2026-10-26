@@ -289,7 +289,7 @@ function WatchlistItem({ entry }: { entry: WatchlistEntry }) {
               <div className="text-sm font-medium text-content truncate">{entry.title}</div>
               {entry.hasNewEpisodes && (
                 <span
-                  className="shrink-0 tag bg-danger/15 text-danger font-medium"
+                  className="shrink-0 inline-flex items-center rounded-full bg-danger/15 px-1.5 py-0.5 text-[10px] font-bold leading-none tracking-[0.05em] text-danger"
                   title={`已更新到第 ${entry.totalEpisodes} 集，点开后可清除提示`}
                 >
                   新增
@@ -306,8 +306,8 @@ function WatchlistItem({ entry }: { entry: WatchlistEntry }) {
               <span>· {formatRelativeTime(entry.updatedAt)}</span>
             </div>
             {hasPercent && (
-              <div className="mt-1.5 h-1 bg-hover rounded-full overflow-hidden">
-                <div className="h-full bg-accent" style={{ width: `${percent}%` }} />
+              <div className="mt-1.5 h-[3px] bg-line rounded-full overflow-hidden">
+                <div className="h-full bg-accent rounded-full" style={{ width: `${percent}%` }} />
               </div>
             )}
           </div>
