@@ -54,6 +54,10 @@ export function Providers({ children }: { children: ReactNode }) {
         try {
           await migrateLocalToServer();
           await syncAll();
+          // 搜索历史走 react-query 缓存（useSearchHistory），Dexie 被同步层
+          // 直接覆盖后缓存不会自己失效，必须显式通知，否则首次同步带回来的
+          // 记录要等到下次输入才出现
+          void queryClient.invalidateQueries({ queryKey: ['searchHistory'] });
           // 设置/视频源：服务端有内容就覆盖本地（换了设备时把源配置带过来），
           // 本地有内容而服务端空则上行补种
           const pulled = await pullSettings();
@@ -77,7 +81,10 @@ export function Providers({ children }: { children: ReactNode }) {
     // 用 Map 而非单变量：1.2s 内连删多条时，单变量只会记住最后一条，
     // 前面的删除漏同步，下次拉取会从服务端把它们「复活」。
     // 键为 `kind:id` 天然去重（同一项反复删只留一条）。
-    const pendingDeletes = new Map<string, { kind: 'watchlist' | 'history'; id: string }>();
+    const pendingDeletes = new Map<
+      string,
+      { kind: 'watchlist' | 'history' | 'searchHistory'; id: string }
+    >();
 
     registerSyncNotifier((kind, id) => {
       if (kind === 'progress') return; // 进度量大且可重建，不单独上行
@@ -92,10 +99,17 @@ export function Providers({ children }: { children: ReactNode }) {
         void (async () => {
           // 逐条确认该 id 在本地是否真的已不存在；存在说明是 upsert，跳过删除
           for (const item of batch) {
+            // `*` 是「整表清空」的保留 id（只用于搜索历史），一定不是 upsert
+            if (item.id === '*') {
+              await deleteRemote(item.kind, '*');
+              continue;
+            }
             const stillExists =
               item.kind === 'watchlist'
                 ? await db.watchlist.get(item.id)
-                : await db.history.get(item.id);
+                : item.kind === 'searchHistory'
+                  ? await db.searchHistory.get(item.id)
+                  : await db.history.get(item.id);
             if (!stillExists) await deleteRemote(item.kind, item.id);
           }
           await pushToServer();

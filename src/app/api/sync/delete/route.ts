@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server';
 import { guardRequest, jsonError } from '@/lib/api-guard';
-import { deleteHistory, deleteWatchlist } from '@/lib/server/sync-repo';
+import { clearSearchHistory, deleteHistory, deleteSearchHistory, deleteWatchlist } from '@/lib/server/sync-repo';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
  * 删除同步：本地删掉一条后必须通知服务端，否则下次拉取会把它复活。
- * 只接受白名单里的两类（watchlist / history），避免越权删别的表。
+ * 只接受白名单里的几类（watchlist / history / searchHistory），避免越权删别的表。
+ * `id` 传 `*` 表示整表清空（搜索历史「清空全部」用）。
  */
 export async function POST(req: Request) {
   const denied = guardRequest(req);
@@ -26,7 +27,11 @@ export async function POST(req: Request) {
   try {
     if (kind === 'watchlist') deleteWatchlist(id);
     else if (kind === 'history') deleteHistory(id);
-    else return jsonError('不支持的删除类型', 400);
+    else if (kind === 'searchHistory') {
+      // 单条删 / 整表清空共用一个接口：`*` 是保留 id，搜索框不允许出现
+      if (id === '*') clearSearchHistory();
+      else deleteSearchHistory(id);
+    } else return jsonError('不支持的删除类型', 400);
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error('[sync/delete] 删除失败', err);
