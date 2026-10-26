@@ -145,6 +145,10 @@ export async function saveWatchlistEntry(seed: WatchlistSeed): Promise<void> {
   merged.duration = merged.duration ?? 0;
   merged.knownEpisodes = merged.knownEpisodes ?? 0;
   merged.hasNewEpisodes = merged.hasNewEpisodes ?? false;
+  // 用户从另一个源重新加收藏时，追更基线也要跟着换源重建
+  if (existing) {
+    Object.assign(merged, baselineResetIfSourceChanged(existing, seed.lastSourceKey, 0));
+  }
   await db.watchlist.put(merged);
   notifySync('watchlist', id);
 }
@@ -221,6 +225,31 @@ export interface PlaybackMeta {
 }
 
 /**
+ * 换源时重置追更基线。
+ *
+ * 为什么必须重置：knownEpisodes 记录的是「在某个源上见过多少集」，而不同
+ * 采集站对同一部剧的集数口径差别很大——A 源 10 集、B 源把两季并成 20 集
+ * 是常态。若不重置，从 A 换到 B 播一次，下一轮检测看到 20 > 10 就会误报
+ * 「新增 10 集」。
+ *
+ * 做法是把 knownEpisodes 归零、totalEpisodes 换成新源的口径，下一轮检测
+ * 走「首次建档」分支静默重建基线，不弹提醒。已亮着的红点也一并清掉——
+ * 它属于旧源的结论，换源后不再成立。
+ */
+function baselineResetIfSourceChanged(
+  existing: WatchlistEntry,
+  nextSourceKey: string | undefined,
+  nextTotalEpisodes: number
+): Partial<WatchlistEntry> {
+  if (!nextSourceKey || nextSourceKey === existing.lastSourceKey) return {};
+  return {
+    knownEpisodes: 0,
+    totalEpisodes: nextTotalEpisodes,
+    hasNewEpisodes: false,
+  };
+}
+
+/**
  * 播放进度驱动的状态迁移（播放页埋点调用）。
  *
  * 规则：**播完或进度跨过 90% 即进入「已看」**，不论此前是否收藏过——
@@ -288,6 +317,7 @@ export async function applyPlaybackProgress(
       episodeIndex: p.episodeIndex,
       playbackPosition: p.position,
       duration: p.duration || existing.duration,
+      ...baselineResetIfSourceChanged(existing, p.sourceKey, meta.totalEpisodes ?? 0),
       ...sourcePatch,
       updatedAt: now,
     });
@@ -297,7 +327,10 @@ export async function applyPlaybackProgress(
 
   // 未看完：只刷新「在看」项的进度与源线索
   if (existing.status !== 'watching') return;
-  const patch: Partial<WatchlistEntry> = { ...sourcePatch };
+  const patch: Partial<WatchlistEntry> = {
+    ...baselineResetIfSourceChanged(existing, p.sourceKey, meta.totalEpisodes ?? 0),
+    ...sourcePatch,
+  };
   if (p.position > existing.playbackPosition + 1) {
     patch.playbackPosition = p.position;
     if (p.duration > 0) patch.duration = p.duration;

@@ -12,6 +12,7 @@ import { applyEnvPresets } from '@/lib/subscription-sync';
 import { db, registerSyncNotifier } from '@/lib/db';
 import { deleteRemote, migrateLocalToServer, pushToServer, syncAll } from '@/lib/sync';
 import { pullSettings, pushSettings } from '@/lib/settings-sync';
+import { checkNewEpisodes } from '@/lib/episode-tracker';
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -61,6 +62,10 @@ export function Providers({ children }: { children: ReactNode }) {
           } else {
             await pushSettings();
           }
+          // 启动时补跑一次追更检测：只在打开收藏面板时才检测的话，顶栏角标
+          // 永远等不到数据——用户不打开面板就看不到红色提醒，提醒等于不存在。
+          // 内部有 6 小时节流，频繁刷新页面不会重复打采集站。
+          void checkNewEpisodes();
         } catch {
           /* 服务端不可用时保持本地数据可用 */
         }
