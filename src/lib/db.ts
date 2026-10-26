@@ -186,6 +186,7 @@ export async function addSearchHistory(text: string): Promise<void> {
   const t = text.trim().slice(0, 50);
   if (!t) return;
   await db.searchHistory.put({ text: t, timestamp: Date.now() });
+  notifySync('searchHistory', t);
   const count = await db.searchHistory.count();
   if (count > MAX_SEARCH_HISTORY) {
     const oldest = await db.searchHistory.orderBy('timestamp').limit(count - MAX_SEARCH_HISTORY).toArray();
@@ -195,16 +196,20 @@ export async function addSearchHistory(text: string): Promise<void> {
 
 export async function removeSearchHistory(text: string): Promise<void> {
   await db.searchHistory.delete(text);
+  notifySync('searchHistory', text);
 }
 
 export async function clearSearchHistory(): Promise<void> {
   await db.searchHistory.clear();
+  // 空串代表「整表清空」：单条删除用具体文本，服务端靠这个区分
+  notifySync('searchHistory', '*');
 }
 
 /** 撤销「清空搜索记录」：按原时间戳回填，保持原有顺序 */
 export async function restoreSearchHistory(entries: SearchHistoryEntry[]): Promise<void> {
   if (entries.length === 0) return;
   await db.searchHistory.bulkPut(entries);
+  for (const e of entries) notifySync('searchHistory', e.text);
 }
 
 // —— 直播测活缓存（TTL 过滤由调用方负责，本层只管存取） ——
@@ -289,7 +294,7 @@ export type { SourceConfig };
 // —— 服务端同步钩子 ——
 // db.ts 不能反向 import sync.ts（sync 依赖 db），故用可注册的回调：
 // sync.ts 在客户端初始化时注册，这里只负责在数据变更后通知它。
-type SyncNotifier = (kind: 'watchlist' | 'history' | 'progress', id: string) => void;
+type SyncNotifier = (kind: 'watchlist' | 'history' | 'progress' | 'searchHistory', id: string) => void;
 let syncNotifier: SyncNotifier | null = null;
 
 /** 由 sync.ts 注册：本地任一数据变更后把改动推给服务端 */
@@ -297,7 +302,7 @@ export function registerSyncNotifier(fn: SyncNotifier | null): void {
   syncNotifier = fn;
 }
 
-function notifySync(kind: 'watchlist' | 'history' | 'progress', id: string): void {
+function notifySync(kind: 'watchlist' | 'history' | 'progress' | 'searchHistory', id: string): void {
   try {
     syncNotifier?.(kind, id);
   } catch {

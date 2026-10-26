@@ -112,6 +112,15 @@ function migrate(d: DatabaseSync): void {
       updated_at INTEGER NOT NULL
     );
 
+    -- 最近搜索：跨设备同步。本地 IndexedDB 里同样有这张表，
+    -- 但原先只有本地，换个设备就看不到之前搜过什么。
+    CREATE TABLE IF NOT EXISTS search_history (
+      id         TEXT PRIMARY KEY,
+      text       TEXT NOT NULL,
+      timestamp  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_search_history_ts ON search_history(timestamp);
+
     -- 键值型杂项设置（偏好、选中的源 key、跳过标记等）
     CREATE TABLE IF NOT EXISTS settings (
       id         TEXT PRIMARY KEY,

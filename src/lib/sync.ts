@@ -83,6 +83,7 @@ interface ServerData {
   progress: { id: string; position: number; duration: number; updatedAt: number }[];
   customSources: { id: string; name: string; url: string; detail?: string; isAdult: boolean }[];
   liveSources: { id: string; name: string; url: string; epg?: string }[];
+  searchHistory?: { id: string; text: string; timestamp: number }[];
   settings: Record<string, unknown>;
 }
 
@@ -100,10 +101,11 @@ async function fetchServer(): Promise<ServerData | null> {
 
 /** 把本地数据打包成服务端格式 */
 export async function collectLocalPayload() {
-  const [watchlist, history, progress, customSources, liveSources] = await Promise.all([
+  const [watchlist, history, progress, searchHistory, customSources, liveSources] = await Promise.all([
     db.watchlist.toArray(),
     db.history.toArray(),
     db.progress.toArray(),
+    db.searchHistory.toArray(),
     Promise.resolve([]),
     Promise.resolve([]),
   ]);
@@ -149,6 +151,11 @@ export async function collectLocalPayload() {
       duration: p.duration,
       updatedAt: p.updatedAt,
     })),
+    searchHistory: searchHistory.map((h) => ({
+      id: h.text,
+      text: h.text,
+      timestamp: h.timestamp,
+    })),
     customSources,
     liveSources,
   };
@@ -190,7 +197,7 @@ export async function pullFromServer(): Promise<boolean> {
   }
 
   try {
-    await db.transaction('rw', db.watchlist, db.history, db.progress, async () => {
+    await db.transaction('rw', db.watchlist, db.history, db.progress, db.searchHistory, async () => {
       await db.watchlist.clear();
       if (data.watchlist.length > 0) {
         await db.watchlist.bulkPut(
@@ -219,6 +226,16 @@ export async function pullFromServer(): Promise<boolean> {
             duration: p.duration,
             updatedAt: p.updatedAt,
           }))
+        );
+      }
+
+      // 最近搜索：服务端为空时不清本地——否则刚登录的新设备会把
+      // 本地已有的搜索记录洗掉（搜索历史是轻数据，本地留着更合理）
+      const remoteSearch = data.searchHistory ?? [];
+      if (remoteSearch.length > 0) {
+        await db.searchHistory.clear();
+        await db.searchHistory.bulkPut(
+          remoteSearch.map((h) => ({ text: h.text, timestamp: h.timestamp }))
         );
       }
     });
@@ -254,7 +271,10 @@ export async function syncAll(): Promise<boolean> {
  * 单独一个接口的原因：整包 push 只能表达「新增/更新」，
  * 无法表达「这条被删了」——服务端那份还在，下次拉取就会复活。
  */
-export async function deleteRemote(kind: 'watchlist' | 'history', id: string): Promise<void> {
+export async function deleteRemote(
+  kind: 'watchlist' | 'history' | 'searchHistory',
+  id: string
+): Promise<void> {
   try {
     await fetch(`${SYNC_ENDPOINT}/delete`, {
       method: 'POST',

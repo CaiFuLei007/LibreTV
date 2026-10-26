@@ -49,6 +49,13 @@ export interface SyncProgress {
   updatedAt: number;
 }
 
+/** 最近搜索：一条文本一条记录，主键即文本本身（本地也是以 text 为主键） */
+export interface SyncSearchHistory {
+  id: string;
+  text: string;
+  timestamp: number;
+}
+
 export interface SyncSource {
   id: string;
   name: string;
@@ -64,6 +71,7 @@ export interface SyncPayload {
   progress?: SyncProgress[];
   customSources?: SyncSource[];
   liveSources?: SyncSource[];
+  searchHistory?: SyncSearchHistory[];
   settings?: Record<string, unknown>;
 }
 
@@ -114,6 +122,12 @@ export function readAll() {
     .prepare(`SELECT id, name, url, epg FROM live_sources ORDER BY position`)
     .all();
 
+  const searchHistory = db
+    .prepare(
+      `SELECT id, text, timestamp FROM search_history ORDER BY timestamp DESC LIMIT 50`
+    )
+    .all();
+
   const settings: Record<string, unknown> = {};
   const settingRows = db.prepare(`SELECT id, value FROM settings`).all() as {
     id: string;
@@ -133,6 +147,7 @@ export function readAll() {
     progress,
     customSources,
     liveSources,
+    searchHistory,
     settings,
   };
 }
@@ -246,6 +261,27 @@ export function writeAll(payload: SyncPayload): void {
       ).run(item.id, item.name || item.url, item.url, item.epg ?? null, 0, Date.now());
     }
 
+    for (const item of payload.searchHistory ?? []) {
+      // 主键就是文本：本地 Dexie 以 text 为主键，这里保持一致，
+      // 删除时才能用同一个 id 对上（否则删一条要额外带原文本）
+      const text = (item.text || item.id || '').trim().slice(0, 50);
+      if (!text) continue;
+      db.prepare(
+        `INSERT INTO search_history (id, text, timestamp) VALUES (?,?,?)
+         ON CONFLICT(id) DO UPDATE SET timestamp=excluded.timestamp
+         WHERE excluded.timestamp >= search_history.timestamp`
+      ).run(text, text, item.timestamp ?? Date.now());
+    }
+
+    // 上限对齐本地 MAX_SEARCH_HISTORY（10）：只留最近 10 条，
+    // 否则服务端会无限堆积，且换设备拉回来时列表会被挤爆
+    const SEARCH_HISTORY_CAP = 10;
+    db.prepare(
+      `DELETE FROM search_history WHERE id NOT IN (
+         SELECT id FROM search_history ORDER BY timestamp DESC LIMIT ?
+       )`
+    ).run(SEARCH_HISTORY_CAP);
+
     const now = Date.now();
     for (const [settingKey, settingValue] of Object.entries(payload.settings ?? {})) {
       db.prepare(
@@ -268,6 +304,14 @@ export function deleteWatchlist(id: string): void {
 
 export function deleteHistory(id: string): void {
   getDb().prepare(`DELETE FROM history WHERE id = ?`).run(id);
+}
+
+export function deleteSearchHistory(id: string): void {
+  getDb().prepare(`DELETE FROM search_history WHERE id = ?`).run(id);
+}
+
+export function clearSearchHistory(): void {
+  getDb().exec('DELETE FROM search_history');
 }
 
 export function clearHistory(): void {

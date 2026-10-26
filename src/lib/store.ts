@@ -24,6 +24,13 @@ export interface AppSettings {
   /** 用户是否在设置中主动选择过推荐数据源；为 false 时部署者的 DEFAULT_RECOMMEND_SOURCE 默认值可生效 */
   recommendSourceTouched: boolean;
   autoplayNext: boolean;
+  /**
+   * 播放倍速（跨集/跨剧记忆）。
+   * 采集站的剧集时长普遍偏长，追剧时常用 1.25~2 倍速；原先倍速只在
+   * 当前这一集当前这一次有效，换集就回到 1.0，每集都要重调。
+   * 存进设置后随设置快照同步，换设备也保持一致。
+   */
+  playbackRate: number;
   /** 跳过片段：按归一化剧名持久化，详见 lib/skip-marks.ts */
   skipMarks: Record<string, SkipMark>;
   /**
@@ -335,6 +342,7 @@ export const useAppStore = create<AppState>()(
       recommendSource: 'hot-list',
       recommendSourceTouched: false,
       autoplayNext: true,
+      playbackRate: 1,
       skipMarks: {},
       // 自动跳过默认开启，但只有用户真正标记过片段才生效
       autoSkipSegments: true,
@@ -932,6 +940,7 @@ export const useAppStore = create<AppState>()(
         recommendSource: s.recommendSource,
         recommendSourceTouched: s.recommendSourceTouched,
         autoplayNext: s.autoplayNext,
+        playbackRate: s.playbackRate,
         skipMarks: s.skipMarks,
         autoSkipSegments: s.autoSkipSegments,
         imageProxyMode: s.imageProxyMode,

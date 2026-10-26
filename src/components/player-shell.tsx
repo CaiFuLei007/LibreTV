@@ -43,6 +43,16 @@ const round1 = (v: number) => Math.round(v * 10) / 10;
  */
 
 /** 暴露给播放页的读取接口：「记录当前」需要比 5s 节流进度回调更精确的位置 */
+/**
+ * 倍速档位：与 Artplayer 设置面板内置的 PLAYBACK_RATE 保持一致，
+ * 否则用 `<` / `>` 调出来的倍速在设置面板里不会高亮。
+ */
+const RATE_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+/** 键盘方向键 / J L 的跳跃秒数：与主流播放器一致（方向键 5s，J/L 10s） */
+const SEEK_STEP_SMALL = 5;
+const SEEK_STEP_LARGE = 10;
+
 export interface PlayerSkipApi {
   getCurrentTime(): number;
   getDuration(): number;
@@ -66,6 +76,10 @@ interface PlayerShellProps {
    * 是否连播下一集仍由 autoplayNext 决定。
    */
   autoSkipSegments: boolean;
+  /** 记忆的播放倍速（跨集/跨剧，来自全局设置）；播放器进入新一集时套用 */
+  playbackRate?: number;
+  /** 用户在播放器里改了倍速：回报给页面层写回全局设置，下一集继续沿用 */
+  onPlaybackRateChange?: (rate: number) => void;
   /** 中段两步态的起点：由页面层持有，面板与快捷键共用同一份状态 */
   pendingStart: number | null;
   /** 更新中段起点；null 表示取消或已消费 */
@@ -106,6 +120,8 @@ export function PlayerShell({
   autoplayNext,
   skipMark,
   autoSkipSegments,
+  playbackRate,
+  onPlaybackRateChange,
   pendingStart,
   onPendingStart,
   onPlayerApi,
@@ -137,6 +153,7 @@ export function PlayerShell({
   // 始终持有最新 props/回调，避免重建播放器
   const propsRef = useRef({
     url, title, adFilter, autoplayNext, skipMark, autoSkipSegments,
+    playbackRate, onPlaybackRateChange,
     pendingStart, onPendingStart, onPlayerApi, onRecordSegment,
     episodeKey, nextUrl, nextEpisodeKey,
     getRestorePosition, onTimeUpdate, onEnded, onPause, onQuality, onRequestSwitchSource,
@@ -144,6 +161,7 @@ export function PlayerShell({
   });
   propsRef.current = {
     url, title, adFilter, autoplayNext, skipMark, autoSkipSegments,
+    playbackRate, onPlaybackRateChange,
     pendingStart, onPendingStart, onPlayerApi, onRecordSegment,
     episodeKey, nextUrl, nextEpisodeKey,
     getRestorePosition, onTimeUpdate, onEnded, onPause, onQuality, onRequestSwitchSource,
@@ -180,6 +198,9 @@ export function PlayerShell({
   const suppressedAutoRef = useRef<Set<string>>(new Set());
   // 上一次 timeupdate 的位置：用于区分「连续播放越过片尾」与「拖动进度条」
   const lastSampleRef = useRef(0);
+  // 程序正在写入倍速（套用记忆值）：此时触发的 ratechange 不该回写设置，
+  // 否则「进入新一集自动套用 1.5x」会被当成用户操作，反复覆盖
+  const applyingRateRef = useRef(false);
   // 跳过按钮提示；用 ref 比较，避免 timeupdate 每 250ms 触发重渲染
   const [skipPrompt, setSkipPrompt] = useState<ResolvedSegment | null>(null);
   const skipPromptRef = useRef<ResolvedSegment | null>(null);
@@ -462,6 +483,26 @@ export function PlayerShell({
     });
   };
 
+  /**
+   * 套用记忆的播放倍速。
+   * 直接写 video.playbackRate 而不是 art.playbackRate：后者会弹一条
+   * 「Rate: 1.5x」的 notice，进入每一集都弹一次属于噪声；
+   * 而 artplayer 的设置面板本身监听 video:ratechange，UI 高亮不受影响。
+   */
+  const applyStoredRate = (art: { video?: HTMLVideoElement }) => {
+    const rate = propsRef.current.playbackRate;
+    if (!art.video || !rate || rate === 1) return;
+    if (Math.abs(art.video.playbackRate - rate) < 0.001) return;
+    applyingRateRef.current = true;
+    try {
+      art.video.playbackRate = rate;
+    } catch {
+      /* 部分浏览器对非法倍速抛错，忽略 */
+    }
+    // 同步触发，标志位立刻复位即可（ratechange 是同步分发的）
+    applyingRateRef.current = false;
+  };
+
   /** 换集：重置每集状态并切换到新 HLS 源（不重建 ArtPlayer）。 */
   const loadEpisode = (targetUrl: string) => {
     if (!targetUrl) return;
@@ -485,6 +526,8 @@ export function PlayerShell({
     const art = artRef.current;
     if (!art) return;
     setupHls(art.video, targetUrl, true);
+    // 换集/换源会重建 video 的 src，播放速率回到 1.0；这里重新套用记忆值
+    applyStoredRate(art);
   };
 
   // —— 创建播放器（仅一次，挂载即创建） ——
@@ -564,6 +607,9 @@ export function PlayerShell({
     });
     artRef.current = art;
 
+    // 首帧就套用记忆倍速：用户在设置里定了 1.5x，进播放器就该是 1.5x
+    applyStoredRate(art);
+
     // 进度条区间可视化：初始渲染一次，换集 duration 变化时重绘
     renderSkipMarks();
     art.on('video:durationchange', renderSkipMarks);
@@ -613,6 +659,16 @@ export function PlayerShell({
     };
     art.on('video:loadedmetadata', reportVideoHeight);
     art.on('video:canplay', reportVideoHeight);
+    // 用户改倍速（设置面板 / 右键菜单 / 长按 3x 之外）→ 记忆下来供下一集沿用。
+    // 程序写入（换集套用记忆值）时由 applyingRateRef 挡掉，避免自我覆盖。
+    art.on('video:ratechange', () => {
+      if (applyingRateRef.current) return;
+      const rate = art.video?.playbackRate;
+      if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return;
+      // playbackRate 是可选的：父层没传时按 1.0 基准比较
+      if (Math.abs(rate - (propsRef.current.playbackRate ?? 1)) < 0.001) return;
+      propsRef.current.onPlaybackRateChange?.(rate);
+    });
     // resize 不在 ArtPlayer 的视频事件转发表里，直接挂原生事件
     art.video?.addEventListener('resize', reportVideoHeight);
 
@@ -741,6 +797,32 @@ export function PlayerShell({
       propsRef.current.onEnded?.();
     });
 
+    /**
+     * 按档位调整倍速。直接写 video.playbackRate 并回报给页面层记忆，
+     * 不走 art.playbackRate：那条路径会弹 notice，连按几下会刷一屏提示。
+     */
+    const setRate = (direction: 1 | -1) => {
+      const currentRate = art.video?.playbackRate ?? 1;
+      // 找到当前值所在的档位；不在档位上时（如长按后的 3x）就近归位
+      let idx = RATE_STEPS.findIndex((r) => Math.abs(r - currentRate) < 0.001);
+      if (idx < 0) idx = RATE_STEPS.findIndex((r) => r > currentRate) - 1;
+      if (idx < 0) idx = 0;
+      const next = RATE_STEPS[Math.min(RATE_STEPS.length - 1, Math.max(0, idx + direction))];
+      if (Math.abs(next - currentRate) < 0.001) {
+        showHint(`${currentRate === 1 ? '正常速度' : `${currentRate} 倍速`}`);
+        return;
+      }
+      applyingRateRef.current = true;
+      try {
+        if (art.video) art.video.playbackRate = next;
+      } catch {
+        /* 忽略 */
+      }
+      applyingRateRef.current = false;
+      propsRef.current.onPlaybackRateChange?.(next);
+      showHint(`${next === 1 ? '正常速度' : `${next} 倍速`}`);
+    };
+
     // —— 键盘快捷键（旧版 hotkey:false + 自定义逻辑的移植） ——
     const shortcuts = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -769,6 +851,57 @@ export function PlayerShell({
         case 'f': case 'F':
           current.fullscreen = !current.fullscreen; e.preventDefault();
           break;
+        // —— J / L：10 秒级快退快进（YouTube / B 站通用），比方向键的 5 秒更适合跳片头片尾 ——
+        case 'j': case 'J': {
+          const target = Math.max(0, current.currentTime - SEEK_STEP_LARGE);
+          current.currentTime = target;
+          showHint(`快退 ${SEEK_STEP_LARGE}s`);
+          e.preventDefault();
+          break;
+        }
+        case 'l': case 'L': {
+          const target = Math.min(current.duration, current.currentTime + SEEK_STEP_LARGE);
+          current.currentTime = target;
+          showHint(`快进 ${SEEK_STEP_LARGE}s`);
+          e.preventDefault();
+          break;
+        }
+        // —— K：播放/暂停（与空格等价，B 站习惯） ——
+        case 'k': case 'K':
+          current.toggle();
+          showHint('播放/暂停');
+          e.preventDefault();
+          break;
+        // —— M：静音开关 ——
+        case 'm': case 'M': {
+          const muted = !current.muted;
+          current.muted = muted;
+          showHint(muted ? '已静音' : `音量 ${Math.round(current.volume * 100)}%`);
+          e.preventDefault();
+          break;
+        }
+        // —— < / >：倍速降低/提高。
+        //   键盘上 `,` `.` 不加 Shift 也是这两个键，一并接受（不同布局一致） ——
+        case '<': case ',':
+          setRate(-1);
+          e.preventDefault();
+          break;
+        case '>': case '.':
+          setRate(1);
+          e.preventDefault();
+          break;
+        // —— 数字键 0-9：跳到 0%~90%（B 站 / YouTube 习惯） ——
+        case '0': case '1': case '2': case '3': case '4':
+        case '5': case '6': case '7': case '8': case '9': {
+          if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) break;
+          const duration = current.duration;
+          if (!Number.isFinite(duration) || duration <= 0) break;
+          const ratio = Number(e.key) / 10;
+          current.currentTime = duration * ratio;
+          showHint(`跳到 ${Math.round(ratio * 100)}%`);
+          e.preventDefault();
+          break;
+        }
         // 标记类快捷键一律要求 Shift：这几键会直接写盘并影响整部剧，
         // 单键太容易误触（误记片头 = 之后每集都被跳过一大段）
         case 'i': case 'I':
@@ -852,7 +985,11 @@ export function PlayerShell({
       originalRate = art.video.playbackRate;
       longPressTimer = setTimeout(() => {
         if (art.video?.paused) return;
+        // 长按只是「临时加速听一下」，不写回记忆值——否则下次进播放器
+        // 会莫名其妙停在 3 倍速
+        applyingRateRef.current = true;
         art.video.playbackRate = 3.0;
+        applyingRateRef.current = false;
         isLongPress = true;
         showHint('3 倍速');
       }, 500);
@@ -860,7 +997,9 @@ export function PlayerShell({
     const onTouchEnd = () => {
       if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
       if (isLongPress) {
+        applyingRateRef.current = true;
         art.video.playbackRate = originalRate;
+        applyingRateRef.current = false;
         isLongPress = false;
         showHint(`${originalRate} 倍速`);
       }

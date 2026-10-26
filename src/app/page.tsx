@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/header';
 import { RecommendSection } from '@/components/douban-section';
+import { ContinueWatching } from '@/components/continue-watching';
 import { DetailModal } from '@/components/detail-modal';
 import { AggregatedCard, aggregateResults } from '@/components/video-card';
 import { useAppStore, resolveSource, isInDisabledSubscription, isSourceDisabled } from '@/lib/store';
@@ -363,6 +364,10 @@ function HomeContent() {
             )}
           </section>
         )}
+
+        {/* 继续观看：只在无搜索的首页出现，放在推荐之前——
+            回访用户第一眼要的是「接着上次看」，而不是「发现新片」 */}
+        {!urlQuery && <ContinueWatching />}
 
         {/* 首页推荐（有搜索时隐藏） */}
         {!urlQuery && (

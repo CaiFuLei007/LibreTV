@@ -446,6 +446,8 @@ function WatchContent() {
                   autoplayNext={store.autoplayNext}
                   skipMark={skipMark}
                   autoSkipSegments={store.autoSkipSegments}
+                  playbackRate={store.playbackRate}
+                  onPlaybackRateChange={(rate) => store.updateSettings({ playbackRate: rate })}
                   pendingStart={pendingStart}
                   onPendingStart={setPendingStart}
                   onPlayerApi={(api) => { playerApiRef.current = api; }}
