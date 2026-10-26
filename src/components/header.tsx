@@ -11,6 +11,8 @@ import { requestShowDownloadManager } from './download-manager';
 import { Icon } from './icon';
 import { SearchHistoryDropdown, useSearchHistory } from './search-history';
 import { cn } from '@/lib/utils';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '@/lib/db';
 
 /** 顶部导航：Logo、搜索框（首页外）、历史、设置 */
 export function Header({ showSearch = false }: { showSearch?: boolean }) {
@@ -19,6 +21,13 @@ export function Header({ showSearch = false }: { showSearch?: boolean }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [watchlistOpen, setWatchlistOpen] = useState(false);
+  // 顶栏角标：收藏条目的 hasNewEpisodes 任一为真就亮红点。
+  // 用 liveQuery 而非一次性查询——追更检测跑完写入新标记后，角标自动出现，
+  // 用户点开条目清除标记后，角标也自动消失，不需要手动刷新。
+  const hasNewEpisodes = useLiveQuery(async () => {
+    const hit = await db.watchlist.filter((r) => r.hasNewEpisodes === true).first();
+    return Boolean(hit);
+  }, [], false);
   const [query, setQuery] = useState('');
   // 与首页搜索框共用同一套「最近搜索」下拉逻辑
   const searchHistory = useSearchHistory(query);
@@ -106,7 +115,11 @@ export function Header({ showSearch = false }: { showSearch?: boolean }) {
               关于
             </HeaderLink>
             <ThemeToggle />
-            <IconButton label="我的收藏" onClick={() => setWatchlistOpen(true)}>
+            <IconButton
+              label={hasNewEpisodes ? '我的收藏（有更新）' : '我的收藏'}
+              onClick={() => setWatchlistOpen(true)}
+              badge={hasNewEpisodes}
+            >
               <Icon name="bookmark" />
             </IconButton>
             <IconButton label="观看历史" onClick={() => setHistoryOpen(true)}>
@@ -143,15 +156,33 @@ function HeaderLink({ href, active, children }: { href: string; active: boolean;
   );
 }
 
-function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+function IconButton({
+  label,
+  onClick,
+  children,
+  badge = false,
+}: {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+  /** 右上角红点：用于「有更新」这类需要主动吸引注意的状态 */
+  badge?: boolean;
+}) {
   return (
     <button
-      className="p-2 rounded-md text-muted hover:text-content hover:bg-hover transition-colors"
+      className="relative p-2 rounded-md text-muted hover:text-content hover:bg-hover transition-colors"
       title={label}
       aria-label={label}
       onClick={onClick}
     >
       {children}
+      {badge && (
+        // 绝对定位到右上角；ring 用表面色描边，图标描边重叠时仍能分清
+        <span
+          className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500 ring-2 ring-surface"
+          aria-hidden="true"
+        />
+      )}
     </button>
   );
 }
