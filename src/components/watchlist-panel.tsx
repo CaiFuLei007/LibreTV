@@ -2,32 +2,42 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import Link from 'next/link';
 import { Drawer } from './drawer';
 import { ConfirmDialog } from './confirm-dialog';
 import { EmptyState, LoadingState } from './states';
 import { Icon } from './icon';
-import { SmartImage } from './smart-image';
 import { useToast } from './toast';
+import { SeriesCard } from './series-card';
+import { WatchlistItem } from './watchlist-item';
 import { db } from '@/lib/db';
 import {
   STATUS_LABEL,
   STATUS_ORDER,
   clearWatchlistByStatus,
-  removeWatchlistEntry,
   restoreWatchlistEntry,
-  setWatchlistStatus,
   type WatchStatus,
   type WatchlistEntry,
 } from '@/lib/watchlist';
-import { buildWatchUrl, cn, formatRelativeTime, formatTime } from '@/lib/utils';
-import { resolveSource, useAppStore } from '@/lib/store';
-import { acknowledgeEpisodes, checkNewEpisodes } from '@/lib/episode-tracker';
+import { cn } from '@/lib/utils';
+import { groupBySeries, matchGroup, type SeriesGroup } from '@/lib/series-group';
+import { checkNewEpisodes } from '@/lib/episode-tracker';
 
 /**
- * 收藏夹抽屉：想看 / 在看 / 已看三个标签共享同一份骨架。
+ * 收藏夹抽屉：想看 / 在看 / 已看 / 废弃四栏共享同一份骨架。
  * 与「观看历史」的差别：这里是用户主动维护的清单，已看由播放进度自动迁入，
  * 因此每栏都支持搜索、单条删除（可撤销）与整栏清空（需确认）。
+ *
+ * ## 系列归组（方案 A）
+ *
+ * 同一系列的若干部（招魂 / 招魂2 / 招魂3 / 招魂4：终章）在列表里只占一行，
+ * 点开才展开成 N 行。判定见 `@/lib/series-group`，是纯展示层派生：
+ *
+ * - **不动数据**：收藏记录、主键、同步、追更检测全部原样；折叠只是渲染前多归一次组。
+ * - **各栏独立聚合**：组只在本栏内成立。潜伏（已看）与潜伏2（想看）分属两栏，
+ *   各自按单条显示——四态语义完全不变，代价是同系列会被拆到两栏（已实测确认取舍）。
+ * - **角标按条目数**：tab 上的数字仍是条目数（已看 10），不按组数（已看 7）。
+ *   改成组数会让用户以为数据丢了。
+ * - **展开态不落库**：sessionStorage 足够，刷新保留、换设备不关心。
  */
 
 const TABS: WatchStatus[] = STATUS_ORDER;
@@ -39,23 +49,54 @@ const EMPTY_HINT: Record<WatchStatus, string> = {
   dropped: '没有废弃的片子：看不下去的在列表里改成「废弃」即可',
 };
 
+/** 展开态存 sessionStorage：刷新要保留，跨设备无意义 */
+const EXPANDED_KEY = 'libretv:watchlist:expanded-series';
+
+function loadExpanded(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = window.sessionStorage.getItem(EXPANDED_KEY);
+    const arr = raw ? (JSON.parse(raw) as unknown) : [];
+    return new Set(Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveExpanded(keys: Set<string>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(EXPANDED_KEY, JSON.stringify([...keys]));
+  } catch {
+    // 隐私模式下 sessionStorage 可能不可写：展开态丢失不影响功能
+  }
+}
+
+type Row<T> =
+  | { kind: 'single'; key: string; entry: T }
+  | { kind: 'group'; key: string; group: SeriesGroup<T>; matchedTitles: string[] };
+
 export function WatchlistPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [tab, setTab] = useState<WatchStatus>('watching');
   const [query, setQuery] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const { toast } = useToast();
+  const listRef = useRef<HTMLUListElement>(null);
 
-  // 三栏各自实时查询：切换标签不需要重新拉全表
-  const rows = useLiveQuery(
-    () => db.watchlist.where('status').equals(tab).toArray(),
-    [tab]
-  );
+  // 四栏各自实时查询：切换标签不需要重新拉全表
+  const rows = useLiveQuery(() => db.watchlist.where('status').equals(tab).toArray(), [tab]);
   const counts = useLiveQuery(async () => {
     const all = await db.watchlist.toArray();
     const acc: Record<WatchStatus, number> = { wish: 0, watching: 0, watched: 0, dropped: 0 };
     for (const r of all) acc[r.status] += 1;
     return acc;
   }, []);
+
+  // 抽屉首次打开时读回上次的展开态
+  useEffect(() => {
+    if (open) setExpanded(loadExpanded());
+  }, [open]);
 
   // 打开收藏面板时补跑一次集数检测（内部有 6 小时节流，不会每次都拉）
   useEffect(() => {
@@ -69,12 +110,62 @@ export function WatchlistPanel({ open, onClose }: { open: boolean; onClose: () =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const keyword = query.trim().toLowerCase();
-  const visible = useMemo(() => {
+  const keyword = query.trim();
+
+  /**
+   * 先归组、再按关键词筛。
+   *
+   * 顺序不能反过来：搜「招魂3」时，命中的是组内成员而不是组标题。若先按关键词
+   * 过滤条目再归组，只剩「招魂3」一条，它就退化成普通单条——用户看不到它属于
+   * 招魂系列，也没法顺手切到招魂2。先归组则整组保留，命中成员时自动展开并高亮。
+   *
+   * 代价：搜「招魂3」会连带显示招魂 1/2/4。这是有意的——同一系列的兄弟就摆在
+   * 眼前，比「只留一行然后让人以为其它几部没了」更符合收藏夹的用法。
+   */
+  const view = useMemo<Row<WatchlistEntry>[]>(() => {
     const all = [...(rows ?? [])].sort((a, b) => b.updatedAt - a.updatedAt);
-    if (!keyword) return all;
-    return all.filter((r) => r.title.toLowerCase().includes(keyword));
+    const { groups, singles } = groupBySeries(all, (e) => e.title);
+
+    const merged: Row<WatchlistEntry>[] = [];
+    for (const group of groups) {
+      const match = keyword ? matchGroup(group, keyword) : { hit: true, memberTitles: [] };
+      if (!match.hit) continue;
+      merged.push({
+        kind: 'group',
+        key: `g:${group.key}`,
+        group,
+        matchedTitles: match.memberTitles,
+      });
+    }
+    const kw = keyword.toLowerCase();
+    for (const entry of singles) {
+      if (kw && !entry.title.toLowerCase().includes(kw)) continue;
+      merged.push({ kind: 'single', key: `s:${entry.id}`, entry });
+    }
+
+    // 排序：组按「组内最新更新」、单条按自身 updatedAt，混排后统一倒序
+    const timeOf = (row: Row<WatchlistEntry>): number =>
+      row.kind === 'single'
+        ? row.entry.updatedAt
+        : Math.max(...row.group.members.map((m) => m.item.updatedAt));
+
+    return merged.sort((a, b) => timeOf(b) - timeOf(a));
   }, [rows, keyword]);
+
+  // 搜索时命中的组强制展开（不受手动折叠状态影响），清空搜索后回到手动状态
+  const isExpanded = (row: Extract<Row<WatchlistEntry>, { kind: 'group' }>): boolean =>
+    expanded.has(row.group.key) || row.matchedTitles.length > 0;
+  const toggle = (key: string): void => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      saveExpanded(next);
+      return next;
+    });
+  };
+
+  const hasAny = (counts?.[tab] ?? 0) > 0;
 
   return (
     <Drawer
@@ -84,7 +175,7 @@ export function WatchlistPanel({ open, onClose }: { open: boolean; onClose: () =
       width="max-w-lg"
       subheader={
         <div className="space-y-2">
-          {/* 三态标签：数量常驻，避免为了看有没有内容而逐栏点开 */}
+          {/* 四态标签：数量常驻，避免为了看有没有内容而逐栏点开 */}
           <div className="flex items-center gap-1">
             {TABS.map((t) => (
               <button
@@ -104,7 +195,7 @@ export function WatchlistPanel({ open, onClose }: { open: boolean; onClose: () =
               </button>
             ))}
           </div>
-          {(counts?.[tab] ?? 0) > 0 && (
+          {hasAny && (
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
                 <Icon
@@ -143,16 +234,26 @@ export function WatchlistPanel({ open, onClose }: { open: boolean; onClose: () =
     >
       {!rows ? (
         <LoadingState />
-      ) : visible.length === 0 ? (
+      ) : view.length === 0 ? (
         <EmptyState
           variant="plain"
-          title={keyword ? `没有匹配「${query.trim()}」的条目` : EMPTY_HINT[tab]}
+          title={keyword ? `没有匹配「${keyword}」的条目` : EMPTY_HINT[tab]}
         />
       ) : (
-        <ul className="space-y-2">
-          {visible.map((entry) => (
-            <WatchlistItem key={entry.id} entry={entry} />
-          ))}
+        <ul className="space-y-2" ref={listRef}>
+          {view.map((row) =>
+            row.kind === 'single' ? (
+              <WatchlistItem key={row.key} entry={row.entry} />
+            ) : (
+              <SeriesCard
+                key={row.key}
+                group={row.group}
+                expanded={isExpanded(row)}
+                onToggle={() => toggle(row.group.key)}
+                matchedTitles={row.matchedTitles}
+              />
+            )
+          )}
         </ul>
       )}
 
@@ -160,9 +261,7 @@ export function WatchlistPanel({ open, onClose }: { open: boolean; onClose: () =
         open={confirmClear}
         danger
         title={`清空「${STATUS_LABEL[tab]}」？`}
-        message={
-          counts ? `将删除 ${counts[tab]} 条记录，此操作不可撤销。` : undefined
-        }
+        message={counts ? `将删除 ${counts[tab]} 条记录，此操作不可撤销。` : undefined}
         confirmLabel="清空"
         onCancel={() => setConfirmClear(false)}
         onConfirm={() => {
@@ -182,201 +281,5 @@ export function WatchlistPanel({ open, onClose }: { open: boolean; onClose: () =
         }}
       />
     </Drawer>
-  );
-}
-
-function WatchlistItem({ entry }: { entry: WatchlistEntry }) {
-  const imageProxyMode = useAppStore((s) => s.imageProxyMode);
-  const customImageProxy = useAppStore((s) => s.customImageProxy);
-  const customAPIs = useAppStore((s) => s.customAPIs);
-  const envSources = useAppStore((s) => s.envSources);
-  const { toast } = useToast();
-  const [imgFailed, setImgFailed] = useState(false);
-  const [statusOpen, setStatusOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-    // 收藏不绑定源：lastSourceKey 只是上次用过的线索，可能缺失或已失效
-  const source = entry.lastSourceKey
-    ? resolveSource({ customAPIs, envSources }, entry.lastSourceKey, {
-        url: entry.lastSourceUrl,
-        name: entry.lastSourceUrl ? '上次使用的源' : undefined,
-      })
-    : undefined;
-
-  // 展开期间点外部收起（与卡片上的收藏菜单一致）
-  useEffect(() => {
-    if (!statusOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setStatusOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [statusOpen]);
-
-  const hasPercent =
-    entry.playbackPosition > 10 &&
-    entry.duration > 0 &&
-    entry.playbackPosition < entry.duration * 0.95;
-  const percent = hasPercent ? Math.round((entry.playbackPosition / entry.duration) * 100) : 0;
-
-  /**
-   * 点击收藏项 → 跳到搜索页按片名重新搜，而不是直接进播放页。
-   * 理由：收藏不绑定源，当初那个源可能失效或画质更差；
-   * 「先去搜、再挑源、然后播」才是正常路径，也避免一进来就发现播不了。
-   */
-  const searchHref = `/?s=${encodeURIComponent(entry.title)}`;
-  // 上次用的源还在配置里才给「接着看」：源被删掉时这条链接会 404
-  const resumeHref =
-    entry.lastSourceKey && entry.lastVodId && source
-      ? buildWatchUrl({
-          sourceKey: entry.lastSourceKey,
-          vodId: entry.lastVodId,
-          index: entry.episodeIndex,
-          title: entry.title,
-          sourceUrl: entry.lastSourceUrl ?? source.url,
-          detail: source.detail,
-        })
-      : null;
-
-  const remove = () => {
-    void removeWatchlistEntry(entry.title).then(() => {
-      toast('已从收藏移除', 'info', {
-        action: {
-          label: '撤销',
-          onClick: () => {
-            void restoreWatchlistEntry(entry).then(() => toast('已恢复', 'success'));
-          },
-        },
-      });
-    });
-  };
-
-  // 列表内直接改状态：改完条目会从当前栏消失，故用 toast 告知去了哪一栏
-  const changeStatus = (next: WatchStatus) => {
-    if (next === entry.status) return;
-    void setWatchlistStatus(entry.title, next).then(() => {
-      toast(`已移至「${STATUS_LABEL[next]}」`, 'success');
-    });
-  };
-
-  return (
-    <li className="relative group">
-      <Link
-        href={searchHref}
-        className="block bg-card hover:bg-hover rounded-lg p-3 pr-10 transition-colors"
-        title={`搜索「${entry.title}」以选择播放源`}
-        onClick={() => {
-          // 用户要去看这部剧了：红点使命完成，已知集数推进到最新
-          void acknowledgeEpisodes(entry.title);
-        }}
-      >
-        <div className="flex items-center gap-3">
-          {entry.pic && !imgFailed ? (
-            <SmartImage
-              url={entry.pic}
-              mode={imageProxyMode}
-              customProxy={customImageProxy}
-              alt=""
-              className="w-10 h-14 object-cover rounded bg-chip"
-              onExhausted={() => setImgFailed(true)}
-            />
-          ) : (
-            <div className="w-10 h-14 rounded bg-chip flex items-center justify-center shrink-0">
-              <Icon name="bookmark" className="w-4 h-4 text-faint" />
-            </div>
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <div className="text-sm font-medium text-content truncate">{entry.title}</div>
-              {entry.hasNewEpisodes && (
-                <span
-                  className="shrink-0 inline-flex items-center rounded-full bg-danger/15 px-1.5 py-0.5 text-[10px] font-bold leading-none tracking-[0.05em] text-danger"
-                  title={`已更新到第 ${entry.totalEpisodes} 集，点开后可清除提示`}
-                >
-                  新增
-                </span>
-              )}
-            </div>
-            <div className="text-xs text-faint mt-0.5 flex items-center gap-1.5 flex-wrap">
-              {entry.totalEpisodes > 0 && (
-                <span>
-                  第 {entry.episodeIndex + 1}/{entry.totalEpisodes} 集
-                </span>
-              )}
-              {hasPercent && <span>· {formatTime(entry.playbackPosition)}</span>}
-              <span>· {formatRelativeTime(entry.updatedAt)}</span>
-            </div>
-            {hasPercent && (
-              <div className="mt-1.5 h-[3px] bg-line rounded-full overflow-hidden">
-                <div className="h-full bg-accent rounded-full" style={{ width: `${percent}%` }} />
-              </div>
-            )}
-          </div>
-        </div>
-      </Link>
-      {/* 主点击是「去搜索选源」；这里再给一个源仍有效时的快捷续播 */}
-      {resumeHref && (
-        <Link
-          href={resumeHref}
-          className="absolute right-[4.6rem] top-2 p-2 rounded-full text-faint hover:text-accent hover:bg-hover transition-colors"
-          aria-label="用上次的源接着看"
-          title={`用上次的源（${source?.name ?? '未知'}）接着看`}
-        >
-          <Icon name="play" className="w-4 h-4" />
-        </Link>
-      )}
-
-      {/* 状态切换与删除并排：常驻可见，手机上无 hover 也能操作 */}
-      <div className="absolute right-2 top-2 flex items-center gap-0.5">
-        <div className="relative" ref={menuRef}>
-          <button
-            type="button"
-            className="p-2 rounded-full text-faint hover:text-accent hover:bg-hover transition-colors"
-            aria-label="修改状态"
-            aria-haspopup="menu"
-            aria-expanded={statusOpen}
-            title="修改状态"
-            onClick={() => setStatusOpen((v) => !v)}
-          >
-            <Icon name="edit" className="w-4 h-4" />
-          </button>
-          {statusOpen && (
-            <div
-              role="menu"
-              className="absolute right-0 top-full mt-1 z-20 w-28 rounded-lg border border-line bg-surface-raised shadow-lg p-1 animate-fade-in"
-            >
-              {STATUS_ORDER.map((st) => (
-                <button
-                  key={st}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={entry.status === st}
-                  onClick={() => {
-                    setStatusOpen(false);
-                    changeStatus(st);
-                  }}
-                  className={cn(
-                    'w-full flex items-center gap-1.5 px-2 py-1.5 rounded text-xs text-left transition-colors',
-                    entry.status === st
-                      ? 'text-accent bg-accent/10'
-                      : 'text-content hover:bg-hover'
-                  )}
-                >
-                  <span className="flex-1">{STATUS_LABEL[st]}</span>
-                  {entry.status === st && <Icon name="check" className="w-3 h-3" />}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <button
-          className="p-2 rounded-full text-faint hover:text-danger hover:bg-hover transition-colors"
-          aria-label="从收藏移除"
-          title="从收藏移除（可在提示中撤销）"
-          onClick={remove}
-        >
-          <Icon name="close" className="w-4 h-4" />
-        </button>
-      </div>
-    </li>
   );
 }
