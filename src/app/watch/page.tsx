@@ -17,6 +17,7 @@ const PlayerShell = dynamic(() => import('@/components/player-shell').then((m) =
 });
 import { EmptyState, LoadingState, Spinner } from '@/components/states';
 import { SwitchSourceModal } from '@/components/switch-source';
+import { WatchlistActions } from '@/components/watchlist-actions';
 import { SkipMarkPanel } from '@/components/skip-mark-panel';
 import { skipMarkKey, validateSegment, type SkipSegment } from '@/lib/skip-marks';
 import type { PlayerSkipApi } from '@/components/player-shell';
@@ -34,7 +35,7 @@ import {
   upsertHistory,
   db,
 } from '@/lib/db';
-import { applyPlaybackProgress } from '@/lib/watchlist';
+import { applyPlaybackProgress, type WatchlistSeed } from '@/lib/watchlist';
 import { cn } from '@/lib/utils';
 
 /**
@@ -131,6 +132,35 @@ function WatchContent() {
     if (episodes.length > 0) return Math.min(Math.max(indexParam, 0), episodes.length - 1);
     return indexParam;
   }, [episodes, indexParam]);
+
+  /**
+   * 播放页的收藏入参。
+   *
+   * 与搜索结果里的 seedOf 不同，这里能拿到详情接口的富元数据（封面/类型/年份/地区/备注），
+   * 也能拿到当前集数——收藏后列表直接显示「第 N/M 集」与进度条，不必等下一次播放埋点。
+   *
+   * 片名仍是唯一身份（收藏不绑源），所以标题取不到有效值时不提供收藏入口：
+   * 否则所有「未知视频」会挤进同一条记录。
+   */
+  const watchSeed = useMemo<WatchlistSeed | null>(() => {
+    const info = detailQuery.data?.videoInfo;
+    const title = videoTitle.trim();
+    if (!title || title === '未知视频') return null;
+    return {
+      title,
+      pic: info?.cover,
+      typeName: info?.typeName,
+      year: info?.year,
+      area: info?.area,
+      remarks: info?.remarks,
+      // 收藏不绑源，这里只留「上次用哪个源看的」这条线索
+      lastSourceKey: sourceKey || undefined,
+      lastSourceUrl: source?.url,
+      lastVodId: vodId || undefined,
+      totalEpisodes: episodes.length || undefined,
+      episodeIndex: currentIndex,
+    };
+  }, [videoTitle, detailQuery.data, sourceKey, source?.url, vodId, episodes.length, currentIndex]);
 
   // 换集/换源后重置：新的一集应重新获得自动换源机会
   useEffect(() => {
@@ -411,6 +441,8 @@ function WatchContent() {
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2">
+            {/* 收藏入口：一点即入「在看」，已收藏后显示状态色、再点可改 */}
+            <WatchlistActions seed={watchSeed} variant="button" />
             <button
               className="btn-ghost btn-sm"
               onClick={() => {

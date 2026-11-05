@@ -47,6 +47,20 @@ function markPending(): void {
   cachedStatus = { ...cachedStatus, pending: true };
 }
 
+/**
+ * 把「有未上行改动」这件事持久化下来。
+ *
+ * 为什么必须对外暴露：上行是 1.2s 防抖的（见 providers.tsx 的 notifySync）。
+ * 用户点完收藏立刻离开页面时，定时器会被 cleanup 取消，这次改动既没上行、
+ * 也没留痕迹；下次进入页面 syncAll() 先拉服务端覆盖本地，刚收的片子就没了。
+ *
+ * 由调用方在「取消定时器」的那一刻调用，保证下次同步先补推、后下拉
+ * （syncAll 的顺序本来就是先推后拉，这里只是把待推标记补上）。
+ */
+export function markSyncPending(): void {
+  markPending();
+}
+
 function clearPending(): void {
   try {
     localStorage.removeItem(PENDING_FLAG);

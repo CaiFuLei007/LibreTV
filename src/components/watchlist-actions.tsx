@@ -9,6 +9,7 @@ import { db } from '@/lib/db';
 import {
   STATUS_LABEL,
   STATUS_ORDER,
+  saveWatchlistEntry,
   toggleWatchlistStatus,
   watchlistKeyOf,
   type WatchStatus,
@@ -17,7 +18,7 @@ import {
 import type { SearchResultItem } from '@/lib/types';
 
 /**
- * 「想看 / 在看 / 已看 / 废弃」四态开关（搜索卡片与详情弹窗共用）。
+ * 「想看 / 在看 / 已看 / 废弃」四态开关（搜索卡片、详情弹窗、播放页共用）。
  *
  * 关键点：**收藏不绑定视频源**。收藏的身份是片名，因此在这里加入时
  * 不需要用户挑源——搜索结果里是哪一条都行，点一下就把这部剧记下来。
@@ -26,6 +27,17 @@ import type { SearchResultItem } from '@/lib/types';
  * 交互取舍：不做四个并排按钮——卡片宽度只有约 330px，四个按钮会把标题挤没。
  * 默认展示当前状态（未收藏时是「+ 收藏」），点开才露出选项；
  * 选中某个状态后再点同一项即取消收藏。
+ *
+ * 三档外观 + 两种点击语义：
+ *
+ * | variant   | 用在哪        | 未收藏时点一下     | 已收藏时点一下 |
+ * |-----------|--------------|------------------|--------------|
+ * | compact   | 搜索卡片角标   | 展开菜单           | 展开菜单      |
+ * | full      | 详情弹窗       | 展开菜单           | 展开菜单      |
+ * | button    | 播放页头部     | **直接加入「在看」** | 展开菜单（改状态/取消） |
+ *
+ * 播放页单独做成「一点即收藏」：用户此刻正在看这部片，让他先展开菜单再选
+ * 「在看」，等于多问一句废话。已收藏后按钮变成状态色，再点才展开菜单去改。
  */
 
 const STATUS_ICON: Record<WatchStatus, IconName> = {
@@ -61,17 +73,18 @@ export function useWatchStatus(title?: string): WatchStatus | null | undefined {
 
 export function WatchlistActions({
   seed,
-  /** 卡片内用紧凑样式，弹窗内用带文字的常规样式 */
+  /** 卡片内用紧凑样式，弹窗内用带文字的常规样式，播放页头部用与 btn-ghost btn-sm 一致的外观 */
   variant = 'compact',
   className,
 }: {
   seed: WatchlistSeed | null;
-  variant?: 'compact' | 'full';
+  variant?: 'compact' | 'full' | 'button';
   className?: string;
 }) {
   const { toast } = useToast();
   const status = useWatchStatus(seed?.title);
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // 展开期间点外部收起：与 Dropdown 行为一致
@@ -94,9 +107,23 @@ export function WatchlistActions({
     });
   };
 
+  /**
+   * 播放页的「一点即收藏」。
+   * 直接落「在看」并带上当前集数与进度（seed 里已备好），
+   * 这样收藏列表立刻显示「第 N/M 集」而不是等下一次播放埋点。
+   */
+  const quickAdd = () => {
+    setSaving(true);
+    void saveWatchlistEntry({ ...seed, status: 'watching' })
+      .then(() => toast(`已加入「在看」`, 'success'))
+      .catch(() => toast('加入收藏失败，请重试', 'error'))
+      .finally(() => setSaving(false));
+  };
+
   const current = status ?? null;
   const label = current ? STATUS_LABEL[current] : '收藏';
   const icon: IconName = current ? STATUS_ICON[current] : 'plus';
+  const isButton = variant === 'button';
 
   return (
     <div ref={rootRef} className={cn('relative', className)}>
@@ -106,24 +133,54 @@ export function WatchlistActions({
         onClick={(e) => {
           e.stopPropagation();
           e.preventDefault();
+          // 播放页且尚未收藏：一点即入「在看」，不弹菜单
+          if (isButton && !current) {
+            quickAdd();
+            return;
+          }
           setOpen((v) => !v);
         }}
         onKeyDown={(e) => e.stopPropagation()}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={current ? `已标记为${label}，点击修改` : '添加到收藏'}
-        title={current ? `已标记为${label}（再点同一项可取消）` : '加入到「想看 / 在看 / 已看 / 废弃」'}
-        className={cn(
-          'flex items-center gap-1 rounded-md transition-colors',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
-          variant === 'compact' ? 'px-1.5 py-1 text-[10px]' : 'px-2.5 py-1.5 text-xs',
+        disabled={saving}
+        aria-label={
+          current ? `已标记为${label}，点击修改` : isButton ? '加入收藏（在看）' : '添加到收藏'
+        }
+        title={
           current
-            ? 'text-accent bg-accent/10 hover:bg-accent/20'
-            : 'text-faint hover:text-content hover:bg-hover'
+            ? `已标记为「${label}」（再点可改状态或取消）`
+            : isButton
+              ? '加入收藏，直接记为「在看」'
+              : '加入到「想看 / 在看 / 已看 / 废弃」'
+        }
+        className={cn(
+          'flex items-center gap-1 transition-colors',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
+          isButton
+            ? // 与同行「下载本集 / 切换资源」完全同款，只把「已收藏」态染成强调色
+              cn(
+                'btn-ghost btn-sm',
+                current && 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/20',
+                saving && 'opacity-60'
+              )
+            : cn(
+                'rounded-md',
+                variant === 'compact' ? 'px-1.5 py-1 text-[10px]' : 'px-2.5 py-1.5 text-xs',
+                current
+                  ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                  : 'text-faint hover:text-content hover:bg-hover'
+              )
         )}
       >
-        <Icon name={icon} className={cn(variant === 'compact' ? 'w-3 h-3' : 'w-4 h-4')} />
-        <span className="truncate">{label}</span>
+        <Icon
+          name={icon}
+          className={cn('shrink-0', variant === 'compact' ? 'w-3 h-3' : isButton ? 'w-3.5 h-3.5' : 'w-4 h-4')}
+        />
+        {/* 播放页窄屏只留图标：头部已有标题、下载、换源，文字标签会把标题挤没 */}
+        <span className={cn('truncate', isButton && 'hidden sm:inline')}>
+          {saving ? '加入中' : label}
+        </span>
       </button>
 
       {open && (

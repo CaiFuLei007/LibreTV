@@ -10,7 +10,13 @@ import { useAppStore, hydrateLiveProbeResults } from '@/lib/store';
 import { api, STATUS_QUERY_KEY } from '@/lib/client-api';
 import { applyEnvPresets } from '@/lib/subscription-sync';
 import { db, registerSyncNotifier } from '@/lib/db';
-import { deleteRemote, migrateLocalToServer, pushToServer, syncAll } from '@/lib/sync';
+import {
+  deleteRemote,
+  markSyncPending,
+  migrateLocalToServer,
+  pushToServer,
+  syncAll,
+} from '@/lib/sync';
 import { pullSettings, pushSettings } from '@/lib/settings-sync';
 import { checkNewEpisodes } from '@/lib/episode-tracker';
 
@@ -91,6 +97,10 @@ export function Providers({ children }: { children: ReactNode }) {
       // 本地先判存不存在：能删掉说明是删除；删不掉说明是新增/更新。
       // 两者都进队列，但只有「已不存在」才需要通知服务端删除。
       pendingDeletes.set(`${kind}:${id}`, { kind, id });
+      // 入队就先置「有未上行改动」标记（pushToServer 成功后会清掉）。
+      // 只在 cleanup 里标记不够：用户直接关标签页 / 强刷时 cleanup 不保证执行，
+      // 而下次进入页面 syncAll() 是先拉服务端覆盖本地——改动就静默没了。
+      markSyncPending();
       if (pendingTimer) clearTimeout(pendingTimer);
       pendingTimer = setTimeout(() => {
         pendingTimer = null;
@@ -120,6 +130,8 @@ export function Providers({ children }: { children: ReactNode }) {
 
     return () => {
       clearTimeout(timer);
+      // 定时器未到点就被卸载时，改动已在上面的入队处标记为待补推，
+      // 下次进入页面 syncAll() 会先推后拉，不会丢。
       if (pendingTimer) clearTimeout(pendingTimer);
       registerSyncNotifier(null);
     };
