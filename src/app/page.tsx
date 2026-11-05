@@ -8,6 +8,16 @@ import { RecommendSection } from '@/components/douban-section';
 import { ContinueWatching } from '@/components/continue-watching';
 import { DetailModal } from '@/components/detail-modal';
 import { AggregatedCard, aggregateResults } from '@/components/video-card';
+import { SearchTabBar } from '@/components/search-tab-bar';
+import { SearchSection } from '@/components/search-section';
+import {
+  ALL_TAB,
+  buildSections,
+  toSearchTab,
+  visibleTabs,
+  type SearchTab,
+} from '@/lib/search-tabs';
+import type { MediaCategory } from '@/lib/media-category';
 import { useAppStore, resolveSource, isInDisabledSubscription, isSourceDisabled } from '@/lib/store';
 import { api } from '@/lib/client-api';
 import type { SearchResultItem, SourceSearchOutcome } from '@/lib/types';
@@ -159,10 +169,49 @@ function HomeContent() {
   // 跨源同名聚合：同名影片合并为一张卡片，展开后可选择具体来源
   const groups = useMemo(() => aggregateResults(list), [list]);
 
+  // —— 方案 E：类型 tab + 「全部」内分组 ——
+  // tab 由 URL ?t= 驱动（可刷新、可回退、可分享）；非法值回落「全部」
+  const tab = toSearchTab(searchParams.get('t'));
+  const tabs = useMemo(() => visibleTabs(groups), [groups]);
+  /** 在「全部」tab 里点过「查看全部」的分类（就地展开，不跳页） */
+  const [expandedCats, setExpandedCats] = useState<Set<MediaCategory>>(() => new Set());
+
   // 分批渲染：新一次搜索（groups 变化）时重置回首批
   const [visibleCount, setVisibleCount] = useState(RESULT_PAGE_SIZE);
-  const visibleGroups = useMemo(() => groups.slice(0, visibleCount), [groups, visibleCount]);
-  useEffect(() => setVisibleCount(RESULT_PAGE_SIZE), [groups]);
+  // 「展开态」与「单分类 tab」也受分批挂载约束：一个分类可能有 155 部，
+  // 一次插 155 张卡会同时触发 155 个画质探测与 155 个 IntersectionObserver
+  const sections = useMemo(
+    () => buildSections(groups, tab, expandedCats, visibleCount),
+    [groups, tab, expandedCats, visibleCount]
+  );
+  useEffect(() => {
+    setVisibleCount(RESULT_PAGE_SIZE);
+    // 换关键词 / 换源后，之前展开过的分段不再相关，回到「每段先看 6 个」。
+    // 只在非空时 set：流式搜索期间 groups 每个源都会变一次，
+    // 空集合 → 空集合 的替换会白白触发一轮整树重渲染。
+    setExpandedCats((prev) => (prev.size === 0 ? prev : new Set()));
+  }, [groups]);
+
+  /** 切 tab：写 URL 并回到首批（对齐爱奇艺：切 tab 即重置分页） */
+  const changeTab = (next: SearchTab) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === ALL_TAB) params.delete('t');
+    else params.set('t', next);
+    const qs = params.toString();
+    router.push(qs ? `/?${qs}` : '/', { scroll: false });
+    setVisibleCount(RESULT_PAGE_SIZE);
+  };
+
+  const loadMore = () => setVisibleCount((v) => v + RESULT_PAGE_SIZE);
+
+  const expandCat = (c: MediaCategory) =>
+    setExpandedCats((prev) => new Set(prev).add(c));
+  const collapseCat = (c: MediaCategory) =>
+    setExpandedCats((prev) => {
+      const next = new Set(prev);
+      next.delete(c);
+      return next;
+    });
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -301,6 +350,18 @@ function HomeContent() {
               </h2>
             </div>
 
+            {/* 类型切换：搜索有结果才出现（无结果时一排「0」没有意义） */}
+            {list.length > 0 && (
+              <div className="mb-4">
+                <SearchTabBar
+                  tabs={tabs}
+                  active={tab}
+                  onChange={changeTab}
+                  pending={isSearching}
+                />
+              </div>
+            )}
+
             {failures.length > 0 && (
               <div className="mb-3 text-xs bg-chip rounded-lg px-3 py-2 flex flex-wrap gap-x-3 gap-y-1">
                 <span className="text-faint">{isSearching ? '以下源暂时无响应：' : '部分点播源请求失败：'}</span>
@@ -331,25 +392,59 @@ function HomeContent() {
               <NoSourceGuide hasSources={customAPIs.length > 0 || envSources.length > 0} />
             ) : list.length > 0 ? (
               <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
-                  {visibleGroups.map((group) => (
-                    <AggregatedCard
-                      key={group.key}
-                      group={group}
-                      sources={selectedSources}
-                      onOpen={(item) => setDetailItem(item)}
-                    />
-                  ))}
-                </div>
-                {groups.length > visibleCount && (
-                  <div className="flex justify-center mt-4">
-                    <button
-                      className="btn-ghost btn-sm"
-                      onClick={() => setVisibleCount((v) => v + RESULT_PAGE_SIZE)}
+                {tab === ALL_TAB ? (
+                  // 「全部」：按类型分段，每段先给 SECTION_PREVIEW 个，可就地展开。
+                  // 分段渲染不会丢条目——各段 total 之和恒等于 groups.length（单测有守恒断言）。
+                  sections.map((section) => (
+                    <SearchSection
+                      key={section.category}
+                      category={section.category}
+                      label={section.label}
+                      total={section.total}
+                      hidden={section.hidden}
+                      previewing={section.previewing}
+                      expandable
+                      expanded={expandedCats.has(section.category)}
+                      onExpand={() => expandCat(section.category)}
+                      onCollapse={() => collapseCat(section.category)}
+                      onLoadMore={loadMore}
                     >
-                      加载更多（还有 {groups.length - visibleCount} 部）
-                    </button>
-                  </div>
+                      {section.shown.map((group) => (
+                        <AggregatedCard
+                          key={group.key}
+                          group={group}
+                          sources={selectedSources}
+                          onOpen={(item) => setDetailItem(item)}
+                        />
+                      ))}
+                    </SearchSection>
+                  ))
+                ) : (
+                  // 单分类 tab：用户已明确收窄，不再做预览截断，只保留分批挂载
+                  sections.map((section) => (
+                    <SearchSection
+                      key={section.category}
+                      category={section.category}
+                      label={section.label}
+                      total={section.total}
+                      hidden={section.hidden}
+                      previewing={false}
+                      expandable={false}
+                      expanded
+                      onExpand={() => {}}
+                      onCollapse={() => {}}
+                      onLoadMore={loadMore}
+                    >
+                      {section.shown.map((group) => (
+                        <AggregatedCard
+                          key={group.key}
+                          group={group}
+                          sources={selectedSources}
+                          onOpen={(item) => setDetailItem(item)}
+                        />
+                      ))}
+                    </SearchSection>
+                  ))
                 )}
               </>
             ) : isSearching ? (
