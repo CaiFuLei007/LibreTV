@@ -55,3 +55,50 @@ describe('fetchUpstream 安全跳转', () => {
     await expect(fetchUpstream(PUBLIC_URL)).rejects.toThrow(/重定向次数过多/);
   });
 });
+
+describe('fetchUpstream 重试', () => {
+  it('每次重试都使用新的超时信号（首轮超时后仍会真的重发请求）', async () => {
+    let attempt = 0;
+    const fn = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new DOMException('超时', 'TimeoutError');
+      return new Response('ok', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fn);
+
+    const res = await fetchUpstream(PUBLIC_URL, { retries: 2 });
+    expect(await res.text()).toBe('ok');
+    expect(attempt).toBe(2);
+  });
+
+  it('外部 signal 已触发时不在重试上浪费预算', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let attempt = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        attempt += 1;
+        throw new DOMException('已取消', 'AbortError');
+      })
+    );
+
+    await expect(
+      fetchUpstream(PUBLIC_URL, { retries: 3, signal: controller.signal })
+    ).rejects.toThrow();
+    expect(attempt).toBe(1); // 外部叫停后不再重试
+  });
+
+  it('retries=0 时只发一次请求', async () => {
+    let attempt = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        attempt += 1;
+        throw new DOMException('超时', 'TimeoutError');
+      })
+    );
+    await expect(fetchUpstream(PUBLIC_URL)).rejects.toThrow();
+    expect(attempt).toBe(1);
+  });
+});

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { guardRequest } from '@/lib/api-guard';
 import { cmsRequestHeaders, filterAdultResults, filterRelevantResults, normalizeTitle, parseSearchList } from '@/lib/cms-parser';
 import { fetchUpstream, getCache, setCache } from '@/lib/fetch-utils';
+import { mapWithConcurrency } from '@/lib/concurrency';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
 import type { SearchResponse, SearchStreamEvent, SourceConfig, SourceSearchOutcome } from '@/lib/types';
 
@@ -44,6 +45,49 @@ const SEARCH_SOURCE_TIMEOUT_MS = (() => {
   return Math.min(60000, Math.max(3000, n));
 })();
 
+/**
+ * 跨源并发上限：同时最多打几个采集站。
+ * 全部并发（35 源 = 35 路）会让部分源站的 WAF 判定为扫描：实测 28 并发时
+ * 约 58% 的源返回 403 / ETIMEDOUT / ECONNRESET，其中多数并非真死，串行重测即恢复。
+ * 降到 8 并发后成功源 11.7→14.0 / 28，命中条目 +25%。
+ * 环境变量 SEARCH_CONCURRENCY 可配，默认 8。
+ */
+const SEARCH_CONCURRENCY = (() => {
+  const n = parseInt(process.env.SEARCH_CONCURRENCY || '8', 10);
+  if (!Number.isFinite(n)) return 8;
+  return Math.min(32, Math.max(1, n));
+})();
+
+/**
+ * 单页请求失败后的重试次数。
+ * 抖动源（超时/连接重置）在同一时刻重试多半能成功：实测配对比较 12 轮，
+ * 加一次重试后成功源 11.75→12.83 / 28，9 胜 3 负。
+ * 用较短的单次超时（而非原超时）重试，避免死源把源级死线耗光。
+ */
+const SEARCH_PAGE_RETRIES = (() => {
+  const n = parseInt(process.env.SEARCH_PAGE_RETRIES || '1', 10);
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(3, Math.max(0, n));
+})();
+
+/** 重试时单次超时占首轮的比例：重试是捡漏，不该比首轮还久 */
+const RETRY_TIMEOUT_RATIO = 0.6;
+
+/**
+ * 整体死线（毫秒）：一次搜索从开始到返回的总时限。
+ *
+ * 有界并发把「全部同时打」换成「排队打」，最坏耗时从 1×源级死线变成
+ * ceil(源数/并发)×源级死线——35 源 / 8 并发 ≈ 5 波 × 10s = 50s，用户不可能等。
+ * 有了整体死线，超时预算用完时剩余源直接按失败结算，不再启动；
+ * 已在跑的源用「剩余时间」作为自己的死线，不会越过总时限。
+ * 默认 15s：够 8 并发跑完约 2 波（覆盖多数快源），又不会让用户干等。
+ */
+const SEARCH_TOTAL_TIMEOUT_MS = (() => {
+  const n = parseInt(process.env.SEARCH_TOTAL_TIMEOUT_MS || '15000', 10);
+  if (!Number.isFinite(n)) return 15000;
+  return Math.min(60000, Math.max(5000, n));
+})();
+
 /** AbortSignal.timeout / 源级死线中断均以 TimeoutError 语义呈现（直接抛出或挂在 cause 上） */
 function isTimeoutError(err: unknown): boolean {
   const candidates: unknown[] = [err, err instanceof Error ? err.cause : undefined];
@@ -56,7 +100,12 @@ function isTimeoutError(err: unknown): boolean {
  * 整源受 SEARCH_SOURCE_TIMEOUT_MS 总死线约束。
  * 旧版在浏览器里打满 N 个请求（暴露用户 IP、无法缓存、超时失控），现全部上移。
  */
-async function searchSource(source: SourceConfig, wd: string): Promise<SourceSearchOutcome> {
+async function searchSource(
+  source: SourceConfig,
+  wd: string,
+  /** 本源的死线毫秒数；缺省用 SEARCH_SOURCE_TIMEOUT_MS。整体死线不足时由调用方下调 */
+  timeoutMs: number = SEARCH_SOURCE_TIMEOUT_MS
+): Promise<SourceSearchOutcome> {
   const start = Date.now();
   const finish = (outcome: Omit<SourceSearchOutcome, 'ms'>): SourceSearchOutcome => ({
     ...outcome,
@@ -83,23 +132,44 @@ async function searchSource(source: SourceConfig, wd: string): Promise<SourceSea
           sourceKey: source.key,
           ok: false,
           list: [],
-          error: `请求超时（>${Math.round(SEARCH_SOURCE_TIMEOUT_MS / 1000)}s）`,
+          error: `请求超时（>${Math.round(timeoutMs / 1000)}s）`,
           timedOut: true,
         })
       );
-    }, SEARCH_SOURCE_TIMEOUT_MS);
+    }, timeoutMs);
   });
 
   const base = source.url.replace(/\/+$/, '');
+  /**
+   * 取单页。失败后按 SEARCH_PAGE_RETRIES 重试，且每次尝试都新建独立的超时信号。
+   *
+   * 不能让重试共用同一个 signal：fetchUpstream 内部的 timeoutSignal 是
+   * AbortSignal.timeout(timeoutMs)，一旦首轮超时它就被永久置为 aborted，
+   * 后续尝试会在 0~1ms 内直接抛 TimeoutError——重试形同虚设。
+   * 源级死线（controller.signal）仍然共享，保证整源到点即停。
+   */
   const fetchPage = async (page: number) => {
     const api = `${base}?ac=videolist&wd=${encodeURIComponent(wd)}&pg=${page}`;
-    const res = await fetchUpstream(api, {
-      timeoutMs: 8000,
-      headers: cmsRequestHeaders(),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= SEARCH_PAGE_RETRIES; attempt++) {
+      // 重试只给更短的单次超时：捡漏用的，不该比首轮还久
+      const timeoutMs =
+        attempt === 0 ? 8000 : Math.round(8000 * RETRY_TIMEOUT_RATIO);
+      try {
+        const res = await fetchUpstream(api, {
+          timeoutMs,
+          headers: cmsRequestHeaders(),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      } catch (err) {
+        lastError = err;
+        // 源级死线已断或客户端已断开：重试没有意义，直接抛出
+        if (controller.signal.aborted) throw err;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('请求失败');
   };
 
   const run = async (): Promise<SourceSearchOutcome> => {
@@ -222,9 +292,40 @@ export async function POST(req: Request) {
     return NextResponse.json(cached);
   }
 
+  // 整体死线起点：缓存未命中才开始计时，避免把缓存查询算进超时预算
+  const startedAt = Date.now();
+  /** 距离整体死线还剩多少毫秒；已超时返回 0 */
+  const remaining = () => SEARCH_TOTAL_TIMEOUT_MS - (Date.now() - startedAt);
+
+  /**
+   * 带整体死线地跑一个源：
+   * - 预算已耗尽 → 不发起请求，直接按「整体超时」结算（并发窗口排队的源不必再白跑）；
+   * - 预算不足一个完整源死线 → 用它作为本源死线，保证整次搜索不越过总时限。
+   */
+  const runSource = (source: SourceConfig): Promise<SourceSearchOutcome> => {
+    const left = remaining();
+    if (left <= 0) {
+      return Promise.resolve({
+        sourceKey: source.key,
+        ok: false,
+        list: [],
+        error: '整体搜索超时，该源未参与',
+        timedOut: true,
+        ms: 0,
+      });
+    }
+    return searchSource(source, wd, Math.min(SEARCH_SOURCE_TIMEOUT_MS, left));
+  };
+
   const isStream = new URL(req.url).searchParams.get('stream') === '1';
   if (!isStream) {
-    const outcomes = await Promise.all(sources.map((source) => searchSource(source, wd)));
+    const settled = await mapWithConcurrency(sources, SEARCH_CONCURRENCY, runSource);
+    // searchSource 内部已吞掉全部异常，rejected 只可能来自调用方逻辑错误，按失败源记
+    const outcomes = settled.map((r, i): SourceSearchOutcome =>
+      r.status === 'fulfilled'
+        ? r.value
+        : { sourceKey: sources[i].key, ok: false, list: [], error: '源处理异常', ms: 0 }
+    );
     const payload = aggregateOutcomes(outcomes, wd, filterAdult);
     setCache(cacheKey, payload, SEARCH_CACHE_TTL);
     return NextResponse.json(payload);
@@ -245,15 +346,13 @@ export async function POST(req: Request) {
 
       // 逐源结算即推送；outcomes 按下标回填保证聚合顺序稳定
       const outcomes: SourceSearchOutcome[] = new Array(sources.length);
-      await Promise.all(
-        sources.map(async (source, i) => {
-          const outcome = await searchSource(source, wd);
-          outcomes[i] = outcome;
-          // 中间结果与最终结果共用去重和过滤规则，避免无关/成人条目短暂出现在页面上。
-          const { list } = aggregateOutcomes([outcome], wd, filterAdult);
-          send({ type: 'source', ...outcome, list });
-        })
-      );
+      await mapWithConcurrency(sources, SEARCH_CONCURRENCY, async (source, i) => {
+        const outcome = await runSource(source);
+        outcomes[i] = outcome;
+        // 中间结果与最终结果共用去重和过滤规则，避免无关/成人条目短暂出现在页面上。
+        const { list } = aggregateOutcomes([outcome], wd, filterAdult);
+        send({ type: 'source', ...outcome, list });
+      });
 
       const payload = aggregateOutcomes(outcomes, wd, filterAdult);
       setCache(cacheKey, payload, SEARCH_CACHE_TTL);

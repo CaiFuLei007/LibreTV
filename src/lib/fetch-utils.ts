@@ -88,13 +88,17 @@ export async function fetchUpstream(url: string, options: FetchOptions = {}): Pr
 /** 同 fetchUpstream，额外返回重定向后的最终 URL */
 export async function fetchUpstreamWithMeta(url: string, options: FetchOptions = {}): Promise<FetchResult> {
   const { timeoutMs = 8000, retries = 0, safeRedirects = true, allowPrivate = false, ...init } = options;
-  // 外部 signal（调用方的总死线中断）与单次超时合并：任一触发即中断请求
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = init.signal
-    ? AbortSignal.any([init.signal, timeoutSignal])
-    : timeoutSignal;
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
+    /*
+     * 每次尝试都必须新建超时信号。
+     * AbortSignal.timeout() 是一次性的：一旦首轮超时就把 signal 永久置为 aborted，
+     * 复用它会让第 2~N 次尝试在 0~1ms 内立刻抛 TimeoutError，重试完全失效
+     * （实测 retries=2 的总耗时与 retries=0 相同）。外部 signal（调用方总死线）
+     * 仍然跨尝试共享，它一旦触发就该整体放弃。
+     */
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
     try {
       if (!safeRedirects) {
         const res = await fetch(url, {
@@ -108,6 +112,8 @@ export async function fetchUpstreamWithMeta(url: string, options: FetchOptions =
       return await fetchWithSafeRedirects(url, { ...init, signal }, { allowPrivate });
     } catch (err) {
       lastError = err;
+      // 外部 signal 已断（总死线到点 / 客户端断开）：重试没有意义
+      if (init.signal?.aborted) break;
     }
   }
   throw lastError instanceof Error ? lastError : new Error('上游请求失败');

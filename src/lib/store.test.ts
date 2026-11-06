@@ -8,7 +8,7 @@ vi.mock('./db', () => ({
   saveLiveProbeResults: vi.fn(async () => {}),
 }));
 
-import { isInDisabledSubscription, isSourceDisabled, keyBelongsToSubscription, SOURCE_DISABLE_LADDER, subKeyPrefix, useAppStore } from './store';
+import { fingerprintOf, isInDisabledSubscription, isSourceDisabled, keyBelongsToSubscription, SOURCE_DISABLE_LADDER, subKeyPrefix, useAppStore } from './store';
 import type { SourceConfig } from './types';
 
 const store = () => useAppStore.getState();
@@ -348,6 +348,96 @@ describe('点播源自动停用阶梯', () => {
     store().recordSourceHealth([okOutcome('a')]);
     expect(isSourceDisabled(store(), 'a')).toBe(false);
     expect(store().sourceHealth['a'].failStreak).toBe(0);
+  });
+});
+
+
+describe('预置源槽位换源', () => {
+  const env = (key: string, url: string): SourceConfig => ({ key, name: key, url });
+  /** 模拟部署者下发名单：urls 依次落在 env_0、env_1… 上 */
+  const deploy = (urls: string[]) =>
+    urls.map((url, i) => ({ key: `env_${i}`, name: url, url }));
+
+  beforeEach(() => {
+    useAppStore.setState({
+      envSources: [],
+      envKeysSeen: [],
+      envKeyFingerprints: {},
+      selectedKeys: [],
+      sourceHealth: {},
+      yellowFilter: false,
+    });
+  });
+
+  it('首次下发自动勾选全部源', () => {
+    store().setEnvSources(deploy(['https://a.com/vod', 'https://b.com/vod']));
+    expect(store().selectedKeys.sort()).toEqual(['env_0', 'env_1']);
+  });
+
+  it('用户取消勾选后，同一份名单再下发不会重新勾上', () => {
+    store().setEnvSources(deploy(['https://a.com/vod', 'https://b.com/vod']));
+    store().setSelectedKeys(['env_1']);
+    store().setEnvSources(deploy(['https://a.com/vod', 'https://b.com/vod']));
+    expect(store().selectedKeys).toEqual(['env_1']);
+  });
+
+  it('槽位 URL 被换掉时，该槽位重新自动勾选（不会被旧记录压住）', () => {
+    store().setEnvSources(deploy(['https://dead.com/vod']));
+    // 用户之前取消过这个槽位
+    store().setSelectedKeys([]);
+    // 部署者把死源换成新源，仍占用 env_0
+    store().setEnvSources(deploy(['https://alive.com/vod']));
+    expect(store().selectedKeys).toContain('env_0');
+  });
+
+  it('槽位 URL 被换掉时，旧的停用记录一并清除', () => {
+    store().setEnvSources(deploy(['https://dead.com/vod']));
+    useAppStore.setState({
+      sourceHealth: { env_0: { ok: false, failStreak: 5, disableCount: 3, permanent: true, timestamp: Date.now() } },
+    });
+    expect(isSourceDisabled(store(), 'env_0')).toBe(true);
+
+    store().setEnvSources(deploy(['https://alive.com/vod']));
+    expect(isSourceDisabled(store(), 'env_0')).toBe(false);
+    expect(store().sourceHealth.env_0).toBeUndefined();
+  });
+
+  it('槽位 URL 未变时，勾选与停用记录都保留（不能误判成换源）', () => {
+    store().setEnvSources(deploy(['https://a.com/vod']));
+    store().setSelectedKeys([]);
+    useAppStore.setState({
+      sourceHealth: { env_0: { ok: false, failStreak: 2, disableCount: 2, timestamp: Date.now() } },
+    });
+
+    store().setEnvSources(deploy(['https://a.com/vod']));
+    expect(store().selectedKeys).toEqual([]);
+    expect(store().sourceHealth.env_0).toBeDefined();
+  });
+
+  it('尾部斜杠 / 大小写差异不算换源', () => {
+    store().setEnvSources(deploy(['https://A.com/vod/']));
+    store().setSelectedKeys([]);
+    store().setEnvSources(deploy(['https://a.com/vod']));
+    expect(store().selectedKeys).toEqual([]);
+  });
+
+  it('其他槽位的状态不受某个槽位换源影响', () => {
+    store().setEnvSources(deploy(['https://a.com/vod', 'https://b.com/vod']));
+    store().setSelectedKeys(['env_1']);
+    useAppStore.setState({
+      sourceHealth: { env_1: { ok: false, failStreak: 1, disableCount: 1, timestamp: Date.now() } },
+    });
+
+    store().setEnvSources(deploy(['https://a2.com/vod', 'https://b.com/vod']));
+    expect(store().selectedKeys.sort()).toEqual(['env_0', 'env_1']);
+    expect(store().sourceHealth.env_1).toBeDefined();
+  });
+
+  it('新增槽位（名单变长）只勾选新增的那个', () => {
+    store().setEnvSources(deploy(['https://a.com/vod']));
+    store().setSelectedKeys([]);
+    store().setEnvSources(deploy(['https://a.com/vod', 'https://b.com/vod']));
+    expect(store().selectedKeys).toEqual(['env_1']);
   });
 });
 

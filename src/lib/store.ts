@@ -203,6 +203,18 @@ interface AppState extends AppSettings {
   envSources: SourceConfig[];
   /** 已向用户展示过并自动勾选过的预置源 key（持久化：用户取消勾选后不再反复勾上） */
   envKeysSeen: string[];
+  /**
+   * 预置源槽位 → 内容指纹（URL 哈希）。
+   *
+   * 预置源的 key 是**数组下标**（env_0、env_1…），好处是增删源时天然有序、
+   * 与部署者写的名单一一对应；代价是「同一个 key」可能先后指向两个不同的源
+   * ——部署者把 slot 5 的死源换成新源时，key 不变而内容全变。
+   * 若不处理，新源会静默继承旧源的两份状态：
+   *   - envKeysSeen 里已有 env_5 → 不会自动勾选，用户以为源丢了；
+   *   - sourceHealth["env_5"] 里可能是不限期停用 → 新源一上来就是「已暂停」。
+   * 记下指纹即可识别「槽位被换过」，并在换源时把这两份状态清干净。
+   */
+  envKeyFingerprints: Record<string, string>;
   subscriptions: SourceSubscription[];
   /** —— 直播模块 —— */
   /** 部署者通过 DEFAULT_LIVE_SOURCES 预置的直播源（服务端下发，不持久化） */
@@ -324,6 +336,7 @@ export const useAppStore = create<AppState>()(
       customAPIs: [],
       envSources: [],
       envKeysSeen: [],
+      envKeyFingerprints: {},
       subscriptions: [],
       liveEnvSources: [],
       liveEnvKeysSeen: [],
@@ -409,18 +422,43 @@ export const useAppStore = create<AppState>()(
       setSelectedKeys: (keys) => set({ selectedKeys: keys }),
 
       setEnvSources: (list) => {
-        // 预置源首次出现时自动勾选（开箱即搜）；用户此后取消勾选不会被反复勾回
+        const prevPrint = get().envKeyFingerprints;
+        const print: Record<string, string> = {};
+        /** 槽位被换过内容的 key：旧勾选与旧健康记录都必须作废 */
+        const replaced = new Set<string>();
+        for (const s of list) {
+          const fp = fingerprintOf(s.url);
+          print[s.key] = fp;
+          if (prevPrint[s.key] && prevPrint[s.key] !== fp) replaced.add(s.key);
+        }
+
+        // 换源的槽位先摘掉旧状态，让它们按「新源」重新走自动勾选
         const seen = new Set(get().envKeysSeen);
+        for (const k of replaced) seen.delete(k);
         const freshKeys = list.map((s) => s.key).filter((k) => !seen.has(k));
+
         // 成人内容过滤开启时，成人预置源不自动勾选
         const toSelect = freshKeys.filter((k) => {
           const src = list.find((s) => s.key === k);
           return !src?.isAdult || !get().yellowFilter;
         });
+
+        // 旧勾选里若残留被换掉的 key，先移除再按新源重新决定，避免「新源被旧勾选状态带着走」
+        const keptSelected = get().selectedKeys.filter((k) => !replaced.has(k));
+
+        // 停用记录同理：换源后旧的连续失败计数不该记在新源头上
+        let health = get().sourceHealth;
+        if (replaced.size > 0) {
+          health = { ...health };
+          for (const k of replaced) delete health[k];
+        }
+
         set({
           envSources: list,
-          envKeysSeen: [...get().envKeysSeen, ...freshKeys],
-          selectedKeys: [...get().selectedKeys, ...toSelect],
+          envKeyFingerprints: print,
+          envKeysSeen: [...seen, ...freshKeys],
+          selectedKeys: [...keptSelected, ...toSelect.filter((k) => !keptSelected.includes(k))],
+          sourceHealth: health,
         });
       },
 
@@ -925,6 +963,7 @@ export const useAppStore = create<AppState>()(
         customAPIs: s.customAPIs,
         selectedKeys: s.selectedKeys,
         envKeysSeen: s.envKeysSeen,
+        envKeyFingerprints: s.envKeyFingerprints,
         subscriptions: s.subscriptions,
         liveEnvKeysSeen: s.liveEnvKeysSeen,
         liveSubscriptions: s.liveSubscriptions,
@@ -977,6 +1016,23 @@ export async function hydrateLiveProbeResults(): Promise<void> {
   } catch {
     // 隐私模式 / IndexedDB 被禁用：放弃持久化，不影响内存态
   }
+}
+
+/**
+ * 预置源槽位的内容指纹：只用来识别「同一个 env_N 槽位换了源」，不参与任何业务判断。
+ *
+ * 用 URL 的 FNV-1a 32 位哈希而不是原文：指纹要随设置一起进 localStorage，
+ * 存原文会让体积翻倍，而识别换源只需要「一样 / 不一样」。
+ * 归一化掉尾部斜杠与大小写，避免仅格式差异被误判成换源。
+ */
+export function fingerprintOf(url: string): string {
+  let hash = 0x811c9dc5;
+  const normalized = url.trim().replace(/\/+$/, '').toLowerCase();
+  for (let i = 0; i < normalized.length; i++) {
+    hash ^= normalized.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
 }
 
 /** 获取指定 key 的源配置；找不到时支持从 URL 参数兜底构造 */
